@@ -1,5 +1,5 @@
 # Stable Diffusion web UI
 
-基本的な詳細については、本家リポジトリを参照してください：
+For basic details, please refer to the official repository:
 
 https://github.com/AUTOMATIC1111/stable-diffusion-webui
