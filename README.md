@@ -20,6 +20,19 @@ The following packages are automatically installed during initial setup:
 
 ## Installation
 
+**Note: The following installation instructions are for Windows only. Linux and macOS are not officially supported and require advanced manual modifications to work properly.**
+
+**Why Windows only?** This repository is designed specifically for Windows. Many packages use Windows-specific binary wheel files (`.whl`) that are hardcoded in the installation process, including:
+- NumPy: Local `whl/numpy-*.whl` files (Windows `win_amd64` builds)
+- SciPy: Windows-specific wheel from HuggingFace
+- Flash-Attention-2: Windows-specific CUDA build
+- Other dependencies: Windows-specific requirements file (`requirements_versions_py312_windows.txt`)
+
+To use on Linux or macOS, you would need to:
+- Build or source Linux/macOS-compatible wheel files for all packages
+- Modify the installation scripts to use platform-appropriate paths and binaries
+- Create or adapt requirements files for your target platform
+
 ### Prerequisites
 
 1. **Python 3.12**: Ensure you have Python 3.12 installed on your system.
@@ -30,14 +43,9 @@ The following packages are automatically installed during initial setup:
    ```
 
 3. **Activate the virtual environment**:
-   - **Windows**:
-     ```bash
-     venv\Scripts\activate
-     ```
-   - **Linux/macOS**:
-     ```bash
-     source venv/bin/activate
-     ```
+   ```bash
+   venv\Scripts\activate
+   ```
 
 4. **Upgrade pip**:
    ```bash
@@ -60,14 +68,9 @@ The following packages are automatically installed during initial setup:
    ```
 
 8. **Launch the web UI**:
-   - **Windows**:
-     ```bash
-     webui-user.bat
-     ```
-   - **Linux/macOS**:
-     ```bash
-     ./webui.sh
-     ```
+   ```bash
+   webui-user.bat
+   ```
 
 ## Documentation
 
