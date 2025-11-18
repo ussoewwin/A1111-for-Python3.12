@@ -70,6 +70,12 @@ To use on Linux or macOS, you would need to:
    webui-user.bat
    ```
 
+## Release Notes
+
+### 1.01
+
+- Added the `--flash-attention` flag and a direct Flash-Attention 3/2 path that no longer routes through xformers, following the implementation described in [Flash Attention 3/2 Implementation for A1111 without xformers](https://note.com/198619891990/n/n537943282560). The fallback chain now proceeds `flash_attn_func → torch.nn.functional.scaled_dot_product_attention → sub_quad_attention`, ensuring generation continues even on systems without xformers/Cutlass kernels.
+
 ## Documentation
 
 For detailed features, installation instructions, and usage documentation, please refer to the official repository:
