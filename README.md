@@ -72,7 +72,7 @@ To use on Linux or macOS, you would need to:
 
 ## Release Notes
 
-最新の変更内容は GitHub リリースページをご覧ください:  
+For the latest changes, visit the GitHub Releases page:  
 https://github.com/ussoewwin/A1111-for-Python3.12/releases
 
 ## Documentation
