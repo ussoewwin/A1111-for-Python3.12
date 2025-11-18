@@ -323,8 +323,8 @@ def requirements_met(requirements_file):
 
 
 def prepare_environment():
-    torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://download.pytorch.org/whl/cu129")
-    torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.8.0 torchvision==0.23.0 --index-url {torch_index_url} --force-reinstall --no-deps")
+    torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://download.pytorch.org/whl/cu130")
+    torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.9.1 torchvision --index-url {torch_index_url}")
     if args.use_ipex:
         if platform.system() == "Windows":
             # The "Nuullll/intel-extension-for-pytorch" wheels were built from IPEX source for Intel Arc GPU: https://github.com/intel/intel-extension-for-pytorch/tree/xpu-main
@@ -357,7 +357,7 @@ def prepare_environment():
 
     xformers_package = os.environ.get('XFORMERS_PACKAGE', 'xformers==0.0.32.post2')
     openclip_package = os.environ.get('OPENCLIP_PACKAGE', "https://github.com/mlfoundations/open_clip/archive/bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b.zip")
-    flash_attn_package = os.environ.get('FLASH_ATTN_PACKAGE', 'https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.2%2Bcu129torch2.8.0cxx11abiTRUE-cp312-cp312-win_amd64.whl')
+    flash_attn_package = os.environ.get('FLASH_ATTN_PACKAGE', 'https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.9.1cxx11abiTRUE-cp312-cp312-win_amd64.whl')
     distutils_wheel = os.environ.get('DISTUTILS_WHEEL', 'https://huggingface.co/ussoewwin/distutils-3.12.0-py3-none-any/resolve/main/distutils-3.12.0-py3-none-any.whl')
 
     assets_repo = os.environ.get('ASSETS_REPO', "https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git")
@@ -408,12 +408,8 @@ def prepare_environment():
             distutils_url = "https://huggingface.co/ussoewwin/distutils-3.12.0-py3-none-any/resolve/main/distutils-3.12.0-py3-none-any.whl"
             run(f'"{python}" -m pip install {distutils_url} --no-deps --no-index', "Installing distutils", "Couldn't install distutils", live=False)
 
-    # Install xformers first (unconditionally)
-    if not is_installed("xformers"):
-        run_pip(f"install {xformers_package}", "xformers")
-        startup_timer.record("install xformers")
-    
-    # Copy xformers_fix files to xformers installation directory (always run, works in any environment)
+    # xformers installation removed - install manually if needed
+    # Copy xformers_fix files to xformers installation directory (only if xformers is installed)
     try:
         import xformers
         xformers_path = os.path.dirname(xformers.__file__)
@@ -430,34 +426,36 @@ def prepare_environment():
                 if os.path.isfile(src_file):
                     shutil.copy2(src_file, dst_file)
                     print(f"Copied {file_name} to xformers/ops/fmha/")
+    except ImportError:
+        # xformers is not installed, skip copying fix files
+        pass
     except Exception as e:
         print(f"Warning: Failed to copy xformers_fix files: {e}")
 
-    if args.reinstall_torch or not is_installed("torch") or not is_installed("torchvision"):
-        run(f'"{python}" -m {torch_command}', "Installing torch and torchvision", "Couldn't install torch", live=True)
-        startup_timer.record("install torch")
-        
-        # Install distutils for Python 3.12 (only from HuggingFace)
-        if sys.version_info >= (3, 12):
-            try:
-                from distutils.version import StrictVersion
-            except ImportError:
-                distutils_url = "https://huggingface.co/ussoewwin/distutils-3.12.0-py3-none-any/resolve/main/distutils-3.12.0-py3-none-any.whl"
-                run(f'"{python}" -m pip install {distutils_url} --no-deps --no-index', "Installing distutils", "Couldn't install distutils", live=False)
-        
-        # Reinstall torch if it was replaced after xformers
-        if not args.skip_torch_cuda_test and not check_run_python("import torch; assert torch.cuda.is_available()"):
-            print("Torch was replaced, reinstalling CUDA version...")
-            run(f'"{python}" -m {torch_command}', "Reinstalling torch and torchvision (CUDA)", "Couldn't reinstall torch", live=True)
+    # PyTorch installation removed - install manually if needed
+    # Install distutils for Python 3.12 if needed (only from HuggingFace)
+    if sys.version_info >= (3, 12):
+        try:
+            from distutils.version import StrictVersion
+        except ImportError:
+            distutils_url = "https://huggingface.co/ussoewwin/distutils-3.12.0-py3-none-any/resolve/main/distutils-3.12.0-py3-none-any.whl"
+            run(f'"{python}" -m pip install {distutils_url} --no-deps --no-index', "Installing distutils", "Couldn't install distutils", live=False)
+    
+    # Check if torch is installed, but don't install it automatically
+    if not is_installed("torch") or not is_installed("torchvision"):
+        print("Warning: PyTorch is not installed. Please install it manually before running the web UI.")
+        print(f"Suggested command: {torch_command}")
 
-    if args.use_ipex:
-        args.skip_torch_cuda_test = True
-    if not args.skip_torch_cuda_test and not check_run_python("import torch; assert torch.cuda.is_available()"):
-        raise RuntimeError(
-            'Torch is not able to use GPU; '
-            'add --skip-torch-cuda-test to COMMANDLINE_ARGS variable to disable this check'
-        )
-    startup_timer.record("torch GPU test")
+    # Only test CUDA if torch is installed
+    if is_installed("torch"):
+        if args.use_ipex:
+            args.skip_torch_cuda_test = True
+        if not args.skip_torch_cuda_test and not check_run_python("import torch; assert torch.cuda.is_available()"):
+            raise RuntimeError(
+                'Torch is not able to use GPU; '
+                'add --skip-torch-cuda-test to COMMANDLINE_ARGS variable to disable this check'
+            )
+        startup_timer.record("torch GPU test")
 
     # Ensure packaging is installed before clip (clip requires pkg_resources.packaging)
     packaging_wheel = os.environ.get('PACKAGING_WHEEL', 'https://huggingface.co/ussoewwin/packaging-25.0-py3-none-any/resolve/main/packaging-25.0-py3-none-any.whl')
