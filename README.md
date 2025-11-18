@@ -56,7 +56,7 @@ To use on Linux or macOS, you would need to:
    pip install torch==2.9.1 torchvision --index-url https://download.pytorch.org/whl/cu130
    ```
 
-6. **Install Triton / ONNX / InsightFace 依存関係**:
+6. **Install Triton / ONNX / InsightFace dependencies**:
    ```bash
    pip install triton-windows
    python.exe -m pip install importlib_metadata onnx polygraphy
