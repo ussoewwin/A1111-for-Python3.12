@@ -1,3 +1,8 @@
+## 1.0.1
+
+### Features
+- Added `--flash-attention` flag and direct Flash-Attention 3/2 pipeline when xformers is absent, following the workflow documented in [Flash Attention 3/2 Implementation for A1111 without xformers](https://note.com/198619891990/n/n537943282560). The new execution chain is `flash_attn_func → torch.nn.functional.scaled_dot_product_attention → sub_quad_attention`, which keeps generation running even when xformers/Cutlass kernels are unavailable.
+
 ## 1.10.1
 
 ### Bug Fixes:
