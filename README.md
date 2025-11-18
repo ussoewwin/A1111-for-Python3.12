@@ -78,4 +78,5 @@ Latest release: [1.01](https://github.com/ussoewwin/A1111-for-Python3.12/release
 
 For detailed features, installation instructions, and usage documentation, please refer to the official repository:
 
+
 https://github.com/AUTOMATIC1111/stable-diffusion-webui
