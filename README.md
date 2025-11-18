@@ -72,8 +72,7 @@ To use on Linux or macOS, you would need to:
 
 ## Release Notes
 
-Latest release: [1.01](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/1.01)  
-Full history: https://github.com/ussoewwin/A1111-for-Python3.12/releases
+Latest release: [1.01](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/1.01) – full history is available on the [GitHub Releases](https://github.com/ussoewwin/A1111-for-Python3.12/releases) page.
 
 ## Documentation
 
