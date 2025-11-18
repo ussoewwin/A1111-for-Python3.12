@@ -15,7 +15,7 @@ Other Python versions are not supported. Please ensure you are using Python 3.12
 The following packages are automatically installed during initial setup:
 
 - **PyTorch**: 2.9.1+cu130 (CUDA 13.0)
-- **Flash-Attention-2**: 2.8.2+cu129torch2.8.0
+- **Flash-Attention-2**: 2.8.3+cu130torch2.9.1
 
 ## Installation
 
@@ -56,9 +56,13 @@ To use on Linux or macOS, you would need to:
    pip install torch==2.9.1 torchvision --index-url https://download.pytorch.org/whl/cu130
    ```
 
-6. **Install numpy 1.26.4**:
+6. **Install Triton / ONNX / InsightFace 依存関係**:
    ```bash
-   pip install numpy==1.26.4
+   pip install triton-windows
+   python.exe -m pip install importlib_metadata onnx polygraphy
+   pip install coloredlogs flatbuffers packaging protobuf sympy
+   pip install --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
+   pip install https://huggingface.co/ussoewwin/Insightface_for_windows/resolve/main/insightface-0.7.3-cp312-cp312-win_amd64.whl
    ```
 
 7. **Launch the web UI**:
