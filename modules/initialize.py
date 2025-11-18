@@ -12,8 +12,19 @@ def imports():
     logging.getLogger("torch.distributed.nn").setLevel(logging.ERROR)  # sshh...
     logging.getLogger("xformers").addFilter(lambda record: 'A matching Triton is not available' not in record.getMessage())
 
+    # Import import_hook first
+    from modules import import_hook  # noqa: F401
+    
     import torch  # noqa: F401
     startup_timer.record("import torch")
+    
+    # Pre-import transformers and apply patch before pytorch_lightning imports it
+    try:
+        import transformers  # noqa: F401
+        import_hook.fix_transformers_generation_mixin()
+    except Exception:
+        pass
+    
     import pytorch_lightning  # noqa: F401
     startup_timer.record("import torch")
     warnings.filterwarnings(action="ignore", category=DeprecationWarning, module="pytorch_lightning")
@@ -34,7 +45,7 @@ def imports():
     except Exception:
         pass
 
-    from modules import paths, timer, import_hook, errors  # noqa: F401
+    from modules import paths, timer, errors  # noqa: F401
     startup_timer.record("setup paths")
 
     import ldm.modules.encoders.modules  # noqa: F401

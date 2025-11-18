@@ -55,6 +55,45 @@ if shared.cmd_opts.flash_attention:
         print(f"[A1111] WARNING: --flash-attention specified but flash_attn failed to load: {e}")
 
 
+def patch_xformers_memory_efficient_attention():
+    """Patch xformers.ops.memory_efficient_attention to handle query_size > 256"""
+    try:
+        import xformers.ops
+        
+        # Store original before any modifications
+        original_func = xformers.ops.memory_efficient_attention
+        
+        # Make sure we have the original
+        if hasattr(original_func, '__wrapped__'):
+            original_func = original_func.__wrapped__
+        
+        def patched_memory_efficient_attention(query, key, value, attn_bias=None, op=None, **kwargs):
+            """Patched version with fallback chain: xformers → SDP → sub_quad"""
+            try:
+                # Try xformers first (FA-3→FA-2→Cutlass priority)
+                query_size = query.shape[-1]
+                if query_size > 256:
+                    print(f"[A1111] xformers: query_size={query_size} > 256, attempting (FA-3→FA-2→Cutlass priority)")
+                
+                return original_func(query, key, value, attn_bias=attn_bias, op=op, **kwargs)
+            except Exception as e:
+                print(f"[A1111] xformers failed: {e}")
+                # Fallback to SDP
+                try:
+                    print("[A1111] Fallback: torch.nn.functional.scaled_dot_product_attention")
+                    return torch.nn.functional.scaled_dot_product_attention(query, key, value, dropout_p=0.0, is_causal=False)
+                except Exception as e2:
+                    print(f"[A1111] SDP failed: {e2}")
+                    # Final fallback to sub_quad_attention
+                    print("[A1111] Fallback: sub_quad_attention")
+                    return sub_quad_attention(query, key, value)
+        
+        xformers.ops.memory_efficient_attention = patched_memory_efficient_attention
+        print("[A1111] Applied xformers.ops.memory_efficient_attention patch (query_size > 256 → SDP, else → xformers FA)")
+    except Exception as e:
+        print(f"[A1111] Warning: Could not patch xformers.memory_efficient_attention: {e}")
+
+
 def check_and_configure_fa3():
     """Check FA-3 availability and configure xformers accordingly"""
     try:
@@ -79,6 +118,9 @@ def check_and_configure_fa3():
             xformers.ops.fmha.dispatch._set_use_fa3(False)
         except:
             pass
+    
+    # Patch memory_efficient_attention for query_size > 256
+    patch_xformers_memory_efficient_attention()
 
 
 def reset_fa3_log():
@@ -617,61 +659,15 @@ def sub_quad_attention(q, k, v, q_chunk_size=1024, kv_chunk_size=None, kv_chunk_
 
 
 def get_xformers_flash_attention_op(q, k, v):
-    # FA-3が有効なら強制。失敗した場合のみFA-2へフォールバック
-    if not shared.cmd_opts.xformers_flash_attention:
-        return None
-
+    # Forgeの実装を参考に、より積極的にFA-2を優先
     try:
-        import xformers.ops.fmha.dispatch
-        import xformers.ops.fmha
-        import xformers.ops.fmha.flash3
-
-        # FA-3が利用可能か確認
-        fa3_available = False
-        try:
-            fa3_available = xformers.ops.fmha.dispatch.fa3_available()
-        except:
-            pass
-        
-        # FA-3が有効な場合、強制適用（エラーが出るまで諦めない）
-        if fa3_available:
-            xformers.ops.fmha.dispatch._set_use_fa3(True)
-            
-            # FA-3を強制的に試す
-            try:
-                if hasattr(xformers.ops, 'MemoryEfficientAttentionFlashAttentionOp3'):
-                    fa3_op = xformers.ops.MemoryEfficientAttentionFlashAttentionOp3
-                    return fa3_op
-            except:
-                pass
-            
-            # FA-3オプもしくはflash3から直接取得を試す
-            try:
-                return (xformers.ops.fmha.flash3.FwOp, xformers.ops.fmha.flash3.BwOp)
-            except:
-                pass
-        
-        # FA-3が無効または完全に失敗した場合、FA-2へフォールバック
-        try:
-            flash_attention_op = xformers.ops.MemoryEfficientAttentionFlashAttentionOp
-            fw, bw = flash_attention_op
-            inputs = xformers.ops.fmha.Inputs(query=q, key=k, value=v, attn_bias=None)
-            if fw.supports(inputs):
-                return flash_attention_op
-        except Exception as e:
-            errors.display_once(e, "enabling flash attention")
-
-        # FA-2も失敗した場合、Cutlassを試す
-        try:
-            cutlass_op = xformers.ops.MemoryEfficientAttentionCutlassOp
-            fw, bw = cutlass_op
-            inputs = xformers.ops.fmha.Inputs(query=q, key=k, value=v, attn_bias=None)
-            if fw.supports(inputs):
-                return cutlass_op
-        except Exception as e:
-            errors.display_once(e, "enabling cutlass attention")
-
-    except:
+        # FA-2を優先的に試す
+        flash_attention_op = xformers.ops.MemoryEfficientAttentionFlashAttentionOp
+        fw, bw = flash_attention_op
+        if fw.supports(xformers.ops.fmha.Inputs(query=q, key=k, value=v, attn_bias=None)):
+            return flash_attention_op
+    except Exception as e:
+        # FA-2が使用できない場合はNoneを返してxformersに自動選択させる
         pass
 
     return None
@@ -737,7 +733,7 @@ def flash_attention_forward(self, x, context=None, mask=None, **kwargs):
         
     except Exception as e:
         print(f"[A1111] Flash-Attention direct failed: {e}")
-        print("[A1111] Falling back to SDPA (Scaled Dot Product Attention)")
+        print("[A1111] Fallback: torch.nn.functional.scaled_dot_product_attention")
         # Fallback to SDPA
         try:
             h = self.heads
@@ -756,10 +752,28 @@ def flash_attention_forward(self, x, context=None, mask=None, **kwargs):
             out = out.reshape(b, n, h * d)
             return self.to_out(out)
         except Exception as e2:
-            print(f"[A1111] SDPA fallback also failed: {e2}")
-            if hasattr(self, "_old_attention_forward"):
-                return self._old_attention_forward(x, context, mask)
-            raise
+            print(f"[A1111] SDPA failed: {e2}")
+            print("[A1111] Fallback: sub_quad_attention")
+            try:
+                # Final fallback to sub_quad for memory efficiency
+                h = self.heads
+                q_in = self.to_q(x)
+                context = context if context is not None else x
+                k_in = self.to_k(context)
+                v_in = self.to_v(context)
+                q, k, v = (t.reshape(t.shape[0], t.shape[1], h, -1) for t in (q_in, k_in, v_in))
+                out = sub_quad_attention(q.reshape(q.shape[0], q.shape[1], -1), 
+                                        k.reshape(k.shape[0], k.shape[1], -1), 
+                                        v.reshape(v.shape[0], v.shape[1], -1))
+                b, s, c = out.shape
+                out = out.reshape(b, s, h, -1)
+                out = out.reshape(b, s, h * out.shape[3])
+                return self.to_out(out)
+            except Exception as e3:
+                print(f"[A1111] sub_quad_attention also failed: {e3}")
+                if hasattr(self, "_old_attention_forward"):
+                    return self._old_attention_forward(x, context, mask)
+                raise
 
 
 def flash_attn_attnblock_forward(self, x):
@@ -838,6 +852,13 @@ def xformers_attention_forward(self, x, context=None, mask=None, **kwargs):
         q, k, v = (t.reshape(t.shape[0], t.shape[1], h, -1) for t in (q_in, k_in, v_in))
         
         del q_in, k_in, v_in
+
+        # Check if query_size > 256 (xformers 0.0.33 limitation)
+        query_size = q.shape[-1]
+        if query_size > 256:
+            print(f"[A1111] Query size {query_size} > 256 detected, using SDP instead of xformers")
+            # Skip xformers and use SDP directly
+            raise NotImplementedError("Query size too large for xformers")
 
         # 出力dtypeは入力xに合わせる
         dtype = x.dtype
@@ -1009,6 +1030,13 @@ def xformers_attnblock_forward(self, x):
         v = self.v(h_)
         b, c, h, w = q.shape
         q, k, v = (t.reshape(t.shape[0], t.shape[1], -1) for t in (q, k, v))
+        
+        # Check if query_size > 256 (xformers 0.0.33 limitation)
+        query_size = q.shape[-1]
+        if query_size > 256:
+            print(f"[A1111] AttnBlock: Query size {query_size} > 256 detected, using SDP instead of xformers")
+            return sdp_attnblock_forward(self, x)
+        
         # Align dtypes (prefer float16 if available)
         dtypes = [q.dtype, k.dtype, v.dtype]
         if torch.float16 in dtypes:
@@ -1019,6 +1047,7 @@ def xformers_attnblock_forward(self, x):
         k = k.to(target_dtype)
         v = v.to(target_dtype)
         out = xformers.ops.memory_efficient_attention(q, k, v)
+        
         if not FA3_LOGGED_THIS_GEN:
             # 使用されたカーネルを確認
             kernel_info = get_xformers_kernel_info()

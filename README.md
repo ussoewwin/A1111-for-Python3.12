@@ -14,8 +14,7 @@ Other Python versions are not supported. Please ensure you are using Python 3.12
 
 The following packages are automatically installed during initial setup:
 
-- **PyTorch**: 2.8.0+cu129 (CUDA 12.9)
-- **xformers**: 0.0.32.post2
+- **PyTorch**: 2.9.1+cu130 (CUDA 13.0)
 - **Flash-Attention-2**: 2.8.2+cu129torch2.8.0
 
 ## Installation
@@ -52,22 +51,17 @@ To use on Linux or macOS, you would need to:
    python -m pip install --upgrade pip
    ```
 
-5. **Install PyTorch 2.8.0+cu129**:
+5. **Install PyTorch 2.9.1+cu130**:
    ```bash
-   pip install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu129 --force-reinstall --no-deps
+   pip install torch==2.9.1 torchvision --index-url https://download.pytorch.org/whl/cu130
    ```
 
-6. **Install xformers 0.0.32.post2**:
-   ```bash
-   pip install xformers==0.0.32.post2
-   ```
-
-7. **Install numpy 1.26.4**:
+6. **Install numpy 1.26.4**:
    ```bash
    pip install numpy==1.26.4
    ```
 
-8. **Launch the web UI**:
+7. **Launch the web UI**:
    ```bash
    webui-user.bat
    ```
