@@ -31,6 +31,9 @@ FLASH_ATTN_VERSION = None
 FLASH_ATTN_TYPE = None  # "FA-3" or "FA-2"
 _flash_attn_log_shown = False
 
+# SDP は巨大な attention 行列を確保するため、シーケンス長がこれを超える場合は最初から sub_quad を使う（OOM 防止）
+SDP_ATTNBLOCK_MAX_SEQ = 4096
+
 if shared.cmd_opts.flash_attention:
     try:
         import flash_attn
@@ -361,13 +364,19 @@ except Exception as e:
 
 def get_available_vram():
     if shared.device.type == 'cuda':
-        stats = torch.cuda.memory_stats(shared.device)
-        mem_active = stats['active_bytes.all.current']
-        mem_reserved = stats['reserved_bytes.all.current']
-        mem_free_cuda, _ = torch.cuda.mem_get_info(torch.cuda.current_device())
-        mem_free_torch = mem_reserved - mem_active
-        mem_free_total = mem_free_cuda + mem_free_torch
-        return mem_free_total
+        try:
+            stats = torch.cuda.memory_stats(shared.device)
+            mem_active = stats['active_bytes.all.current']
+            mem_reserved = stats['reserved_bytes.all.current']
+            mem_free_cuda, _ = torch.cuda.mem_get_info(torch.cuda.current_device())
+            mem_free_torch = mem_reserved - mem_active
+            mem_free_total = mem_free_cuda + mem_free_torch
+            return mem_free_total
+        except Exception as e:
+            # OOM 等で CUDA がエラー状態のときは保守的な小さい値を返す
+            # sub_quad_attention が小さめのチャンクで動くようにする
+            print(f"[A1111] get_available_vram failed ({e}), using conservative default")
+            return 256 * 1024 * 1024  # 256MB
     else:
         return psutil.virtual_memory().available
 
@@ -813,6 +822,8 @@ def flash_attn_attnblock_forward(self, x):
         if out.dtype != original_dtype:
             out = out.to(original_dtype)
         
+        torch.cuda.empty_cache()  # CRITICAL: Clear memory after FA to prevent fragmentation
+        
         # Reshape back to (batch, channels, height, width)
         out = out.permute(0, 2, 1).reshape(b, c, h, w)
         out = self.proj_out(out)
@@ -1074,6 +1085,7 @@ def sdp_attnblock_forward(self, x):
     k = self.k(h_)
     v = self.v(h_)
     b, c, h, w = q.shape
+    seq_len = h * w
     q, k, v = (rearrange(t, 'b c h w -> b (h w) c') for t in (q, k, v))
     dtype = q.dtype
     if shared.opts.upcast_attn:
@@ -1081,11 +1093,35 @@ def sdp_attnblock_forward(self, x):
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
-    out = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
-    out = out.to(dtype)
-    out = rearrange(out, 'b (h w) c -> b c h w', h=h)
-    out = self.proj_out(out)
-    return x + out
+
+    # シーケンス長が大きい場合は最初から sub_quad を使う（SDP は attention 行列で OOM になりやすい）
+    use_sub_quad_direct = seq_len > SDP_ATTNBLOCK_MAX_SEQ
+    if use_sub_quad_direct:
+        out = sub_quad_attention(q, k, v)
+        out = out.to(dtype)
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return x + out
+
+    try:
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
+        out = out.to(dtype)
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return x + out
+    except Exception as e:
+        print(f"[A1111] SDP attnblock failed: {e}")
+        print("[A1111] Fallback: sub_quad_attention")
+        if q.device.type == 'cuda':
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        out = sub_quad_attention(q, k, v)
+        out = out.to(dtype)
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return x + out
 
 
 def sdp_no_mem_attnblock_forward(self, x):
