@@ -9,22 +9,21 @@
 ### 1. Python バージョンチェックの更新
 **ファイル**: `modules/launch_utils.py` (`check_python_version()`)
 
-- Windows 環境: Python 3.10 / 3.11 / 3.12 をサポート
-- Linux/Mac 環境: Python 3.7 〜 3.12 をサポート
+- Windows / Linux / Mac いずれの環境でも Python 3.12 をサポート対象に追加
+- 本家 A1111 では Python 3.12 が許可対象に含まれていなかったため、`check_python_version()` の許可リストを拡張
 - `--skip-python-version-check` フラグで警告抑止可能
 
 ### 2. プラットフォーム別 requirements ファイル自動選択
 **ファイル**: `modules/launch_utils.py`
 
-Python 3.12 を検出したとき、OS に応じて以下の requirements を自動選択します。
+本フォークは Python 3.12 専用改造版のため、起動時は以下の requirements を OS 別に自動選択します。
 
 | 環境 | 要件ファイル |
 |------|-------------|
-| Windows + Python 3.12 | `requirements_versions_py312_windows.txt` |
-| Linux/Mac + Python 3.12 | `requirements_versions_py312.txt` |
-| Python 3.11 以下 | `requirements_versions.txt` |
+| Windows | `requirements_versions_py312_windows.txt` |
+| Linux / Mac | `requirements_versions_py312.txt` |
 
-`requirements_versions_py312.txt` と `requirements_versions_py312_windows.txt` は現状バイト同一（共通基盤）で、プラットフォーム固有処理は後述の launch_utils 側分岐で吸収しています。
+両ファイルは現状バイト同一（共通基盤）で、プラットフォーム固有処理は後述の launch_utils 側分岐で吸収しています。
 
 ### 3. scikit-image ビルド回避（Windows）
 - `requirements_versions_py312_windows.txt` で `scikit-image>=0.22.0` を指定
@@ -135,9 +134,8 @@ stable-diffusion-webui/
 │   ├── LINUX_MAC_PY312_STARTUP_FIX.md     # Linux/Mac 起動失敗修正の詳細（英語）
 │   ├── FA2_direct_load_design.md          # FA2 ダイレクトロード設計（英語）
 │   └── INCIDENT_2026-04-22_A1111_Cursor_git_disabled.md
-├── requirements_versions_py312.txt         # Linux/Mac + Python 3.12 用
-├── requirements_versions_py312_windows.txt # Windows + Python 3.12 用
-├── requirements_versions.txt               # Python 3.11 以下用
+├── requirements_versions_py312.txt         # Linux/Mac 用
+├── requirements_versions_py312_windows.txt # Windows 用
 ├── modules/launch_utils.py                 # 本ドキュメントで解説している分岐ロジック
 ├── modules/sd_disable_initialization.py    # transformers 5.x 互換化
 └── configs/v1-inference.yaml               # OOM 対策（use_checkpoint: True）
