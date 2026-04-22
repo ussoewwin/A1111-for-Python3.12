@@ -149,7 +149,7 @@ The user's observation — *"it worked yesterday"* — is consistent: the system
 
 ### 3.1 Eliminate all external dependencies (vendoring)
 
-Rationale: the user's explicit directive — *"外部依存全部殺せ"* (kill all external dependencies). This neutralises Cause A permanently for any repository that might 404 in the future.
+Rationale: the user's explicit directive — *"kill all external dependencies"*. This neutralises Cause A permanently for any repository that might 404 in the future.
 
 - Downloaded the five pinned commits of the five external dependencies as ZIP archives:
   - `AUTOMATIC1111/stable-diffusion-webui-assets @ 6f7db241`
