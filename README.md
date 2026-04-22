@@ -36,104 +36,161 @@ The following packages are installed automatically during initial setup:
 
 ## Installation
 
-### Common Prerequisites (all platforms)
+Pick the section for your OS and follow the steps in order.
 
-1. **Python 3.12**: Ensure Python 3.12 is installed.
+### Windows
 
-2. **Create and activate a virtual environment**:
-   - Windows:
-     ```cmd
-     python -m venv venv
-     venv\Scripts\activate
-     ```
-   - Linux / macOS:
-     ```bash
-     python3.12 -m venv venv
-     source venv/bin/activate
-     ```
+**Toolchain prerequisites**
+- No additional toolchain required (all wheels are prebuilt).
 
-3. **Upgrade pip**:
-   ```bash
+**Install steps**
+
+1. Install Python 3.12.
+
+2. Create and activate a virtual environment:
+   ```cmd
+   python -m venv venv
+   venv\Scripts\activate
+   ```
+
+3. Upgrade pip:
+   ```cmd
    python -m pip install --upgrade pip
    ```
 
-4. **Install PyTorch 2.10.0+cu130**:
-   ```bash
+4. Install PyTorch 2.10.0+cu130:
+   ```cmd
    pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu130
    ```
 
-### Triton / ONNX / Insightface extras
+5. Install cross-platform Python deps:
+   ```cmd
+   pip install importlib_metadata onnx polygraphy coloredlogs flatbuffers packaging protobuf sympy
+   ```
 
-Common deps (cross-platform, pure Python):
-```bash
-pip install importlib_metadata onnx polygraphy coloredlogs flatbuffers packaging protobuf sympy
-```
+6. Install Triton (Windows prebuilt):
+   ```cmd
+   pip install triton-windows
+   ```
 
-#### Windows
+7. Install ONNX Runtime GPU (Windows CUDA 13 nightly feed):
+   ```cmd
+   pip install --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
+   ```
 
-- Triton: `triton-windows` (prebuilt).
-- ONNX Runtime GPU: Windows CUDA 13 nightly feed.
-- Insightface: Windows prebuilt wheel from HuggingFace.
+8. Install Insightface (Windows prebuilt wheel):
+   ```cmd
+   pip install https://huggingface.co/ussoewwin/Insightface_for_windows/resolve/main/insightface-0.7.3-cp312-cp312-win_amd64.whl
+   ```
 
-```cmd
-pip install triton-windows
-pip install --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
-pip install https://huggingface.co/ussoewwin/Insightface_for_windows/resolve/main/insightface-0.7.3-cp312-cp312-win_amd64.whl
-```
+9. Launch:
+   ```cmd
+   webui-user.bat
+   ```
 
-#### Linux
+### Linux
 
-- Triton: stock `triton` from PyPI (Linux manylinux wheels).
-- ONNX Runtime GPU: stock PyPI wheel built against the installed CUDA toolkit.
-- Insightface: source build (build toolchain required).
-
-```bash
-pip install triton
-pip install onnxruntime-gpu
-pip install insightface==0.7.3
-```
-
-#### macOS
-
-- Triton: not supported by upstream Triton on macOS; skip.
-- ONNX Runtime: CPU build (or CoreML build for Apple Silicon).
-- Insightface: source build.
-
-```bash
-pip install onnxruntime          # CPU
-# or, on Apple Silicon:
-pip install onnxruntime-coreml
-pip install insightface==0.7.3
-```
-
-### Platform prerequisites
-
-#### Windows
-- No additional toolchain required (all wheels are prebuilt).
-
-#### Linux
+**Toolchain prerequisites**
 - CUDA toolkit 13.0 with `nvcc` on `PATH` (required to build Flash-Attention 2 from source).
-- Standard build toolchain (`gcc`, `g++`, `make`, Python headers).
-- First startup will spend ~30 minutes building FA2. To use an alternate prebuilt wheel, set:
+- Build toolchain (`gcc`, `g++`, `make`, Python headers).
+- First startup spends ~30 minutes building FA2. To use an alternate prebuilt wheel instead:
   ```bash
   export FLASH_ATTN_PACKAGE=<url-or-wheel-path>
   ```
 
-#### macOS
-- FA2 is skipped automatically (the MPS backend is not CUDA-compatible).
-- Other Python 3.12 adjustments are shared with Linux.
-- Xcode Command Line Tools (`xcode-select --install`) required for any source builds (Insightface, etc.).
+**Install steps**
 
-### Launching
+1. Install Python 3.12.
 
-- Windows:
-  ```cmd
-  webui-user.bat
-  ```
-- Linux / macOS:
-  ```bash
-  ./webui.sh
-  ```
+2. Create and activate a virtual environment:
+   ```bash
+   python3.12 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. Upgrade pip:
+   ```bash
+   python -m pip install --upgrade pip
+   ```
+
+4. Install PyTorch 2.10.0+cu130:
+   ```bash
+   pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu130
+   ```
+
+5. Install cross-platform Python deps:
+   ```bash
+   pip install importlib_metadata onnx polygraphy coloredlogs flatbuffers packaging protobuf sympy
+   ```
+
+6. Install Triton (stock PyPI manylinux wheel):
+   ```bash
+   pip install triton
+   ```
+
+7. Install ONNX Runtime GPU:
+   ```bash
+   pip install onnxruntime-gpu
+   ```
+
+8. Install Insightface (source build):
+   ```bash
+   pip install insightface==0.7.3
+   ```
+
+9. Launch:
+   ```bash
+   ./webui.sh
+   ```
+
+### macOS
+
+**Toolchain prerequisites**
+- Xcode Command Line Tools (`xcode-select --install`) for source builds.
+- Flash-Attention 2 is skipped automatically (the MPS backend is not CUDA-compatible).
+- Triton is not supported by upstream Triton on macOS; skip.
+
+**Install steps**
+
+1. Install Python 3.12.
+
+2. Create and activate a virtual environment:
+   ```bash
+   python3.12 -m venv venv
+   source venv/bin/activate
+   ```
+
+3. Upgrade pip:
+   ```bash
+   python -m pip install --upgrade pip
+   ```
+
+4. Install PyTorch 2.10.0 (CPU / MPS):
+   ```bash
+   pip install torch==2.10.0 torchvision
+   ```
+
+5. Install cross-platform Python deps:
+   ```bash
+   pip install importlib_metadata onnx polygraphy coloredlogs flatbuffers packaging protobuf sympy
+   ```
+
+6. Install ONNX Runtime (CPU, or CoreML on Apple Silicon):
+   ```bash
+   pip install onnxruntime
+   # or, on Apple Silicon:
+   pip install onnxruntime-coreml
+   ```
+
+7. Install Insightface (source build):
+   ```bash
+   pip install insightface==0.7.3
+   ```
+
+8. Launch:
+   ```bash
+   ./webui.sh
+   ```
 
 ## How Linux / macOS support works
 
