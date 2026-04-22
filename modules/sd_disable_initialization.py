@@ -72,13 +72,6 @@ class DisableInitialization(ReplaceHelper):
             return res
 
         def transformers_modeling_utils_load_pretrained_model(*args, **kwargs):
-            # transformers 4.30.2 and 4.56.0+ compatibility: handle different argument structure
-            if len(args) >= 4:
-                # Create a new args tuple with the correct structure for transformers 4.30.2
-                new_args = list(args)
-                if len(new_args) > 3:
-                    new_args[3] = '/'  # resolved_archive_file; must set it to something to prevent what seems to be a bug
-                args = tuple(new_args)
             return self.transformers_modeling_utils_load_pretrained_model(*args, **kwargs)
 
         def transformers_utils_hub_get_file_from_cache(original, url, *args, **kwargs):
