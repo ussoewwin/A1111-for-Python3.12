@@ -324,7 +324,7 @@ def requirements_met(requirements_file):
 
 def prepare_environment():
     torch_index_url = os.environ.get('TORCH_INDEX_URL', "https://download.pytorch.org/whl/cu130")
-    torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.9.1 torchvision --index-url {torch_index_url}")
+    torch_command = os.environ.get('TORCH_COMMAND', f"pip install torch==2.10.0 torchvision --index-url {torch_index_url}")
     if args.use_ipex:
         if platform.system() == "Windows":
             # The "Nuullll/intel-extension-for-pytorch" wheels were built from IPEX source for Intel Arc GPU: https://github.com/intel/intel-extension-for-pytorch/tree/xpu-main
@@ -354,10 +354,20 @@ def prepare_environment():
     else:
         requirements_file = os.environ.get('REQS_FILE', "requirements_versions.txt")
     requirements_file_for_npu = os.environ.get('REQS_FILE_FOR_NPU', "requirements_npu.txt")
-
-    xformers_package = os.environ.get('XFORMERS_PACKAGE', 'xformers==0.0.32.post2')
     openclip_package = os.environ.get('OPENCLIP_PACKAGE', "https://github.com/mlfoundations/open_clip/archive/bb6e834e9c70d9c27d0dc3ecedeebeaeb1ffad6b.zip")
-    flash_attn_package = os.environ.get('FLASH_ATTN_PACKAGE', 'https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.9.1cxx11abiTRUE-cp312-cp312-win_amd64.whl')
+    # Flash-Attention 2 source is platform-specific:
+    #   Windows: prebuilt wheel (cu130 + torch 2.10)
+    #   Linux:   source build via PyPI (requires CUDA toolkit + nvcc, ~30min compile)
+    #   Mac:     skipped (FA2 requires CUDA; MPS backend cannot use it)
+    if platform.system() == "Windows":
+        flash_attn_package = os.environ.get('FLASH_ATTN_PACKAGE', 'https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl')
+        fa2_install_enabled = True
+    elif platform.system() == "Linux":
+        flash_attn_package = os.environ.get('FLASH_ATTN_PACKAGE', 'flash-attn==2.8.3')
+        fa2_install_enabled = True
+    else:
+        flash_attn_package = None
+        fa2_install_enabled = False
     distutils_wheel = os.environ.get('DISTUTILS_WHEEL', 'https://huggingface.co/ussoewwin/distutils-3.12.0-py3-none-any/resolve/main/distutils-3.12.0-py3-none-any.whl')
 
     assets_repo = os.environ.get('ASSETS_REPO', "https://github.com/AUTOMATIC1111/stable-diffusion-webui-assets.git")
@@ -466,8 +476,11 @@ def prepare_environment():
         run_pip(f"install {openclip_package}", "open_clip")
         startup_timer.record("install open_clip")
 
-    if not is_installed("flash_attn"):
-        run_pip(f"install {flash_attn_package}", "flash_attn")
+    if fa2_install_enabled and not is_installed("flash_attn"):
+        if platform.system() == "Linux":
+            run_pip(f"install {flash_attn_package} --no-build-isolation", "flash_attn")
+        else:
+            run_pip(f"install {flash_attn_package}", "flash_attn")
         startup_timer.record("install flash_attn")
 
     if not is_installed("ngrok") and args.ngrok:
@@ -546,7 +559,7 @@ def prepare_environment():
     try:
         from google.protobuf import runtime_version
     except ImportError:
-        run_pip("install --force-reinstall --no-cache-dir protobuf==6.32.0", "protobuf", live=False)
+        run_pip("install --force-reinstall --no-cache-dir protobuf==7.34.1", "protobuf", live=False)
 
     if not os.path.isfile(requirements_file_for_npu):
         requirements_file_for_npu = os.path.join(script_path, requirements_file_for_npu)
