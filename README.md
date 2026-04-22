@@ -62,19 +62,56 @@ The following packages are installed automatically during initial setup:
    pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu130
    ```
 
-### Windows-specific extras
+### Triton / ONNX / Insightface extras
 
-Triton / ONNX / Insightface are shipped as Windows prebuilt wheels:
+Common deps (cross-platform, pure Python):
+```bash
+pip install importlib_metadata onnx polygraphy coloredlogs flatbuffers packaging protobuf sympy
+```
+
+#### Windows
+
+- Triton: `triton-windows` (prebuilt).
+- ONNX Runtime GPU: Windows CUDA 13 nightly feed.
+- Insightface: Windows prebuilt wheel from HuggingFace.
+
 ```cmd
 pip install triton-windows
-python.exe -m pip install importlib_metadata onnx polygraphy
-pip install coloredlogs flatbuffers packaging protobuf sympy
 pip install --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
 pip install https://huggingface.co/ussoewwin/Insightface_for_windows/resolve/main/insightface-0.7.3-cp312-cp312-win_amd64.whl
 ```
 
-### Linux prerequisites
+#### Linux
 
+- Triton: stock `triton` from PyPI (Linux manylinux wheels).
+- ONNX Runtime GPU: stock PyPI wheel built against the installed CUDA toolkit.
+- Insightface: source build (build toolchain required).
+
+```bash
+pip install triton
+pip install onnxruntime-gpu
+pip install insightface==0.7.3
+```
+
+#### macOS
+
+- Triton: not supported by upstream Triton on macOS; skip.
+- ONNX Runtime: CPU build (or CoreML build for Apple Silicon).
+- Insightface: source build.
+
+```bash
+pip install onnxruntime          # CPU
+# or, on Apple Silicon:
+pip install onnxruntime-coreml
+pip install insightface==0.7.3
+```
+
+### Platform prerequisites
+
+#### Windows
+- No additional toolchain required (all wheels are prebuilt).
+
+#### Linux
 - CUDA toolkit 13.0 with `nvcc` on `PATH` (required to build Flash-Attention 2 from source).
 - Standard build toolchain (`gcc`, `g++`, `make`, Python headers).
 - First startup will spend ~30 minutes building FA2. To use an alternate prebuilt wheel, set:
@@ -82,10 +119,10 @@ pip install https://huggingface.co/ussoewwin/Insightface_for_windows/resolve/mai
   export FLASH_ATTN_PACKAGE=<url-or-wheel-path>
   ```
 
-### macOS notes
-
+#### macOS
 - FA2 is skipped automatically (the MPS backend is not CUDA-compatible).
 - Other Python 3.12 adjustments are shared with Linux.
+- Xcode Command Line Tools (`xcode-select --install`) required for any source builds (Insightface, etc.).
 
 ### Launching
 
