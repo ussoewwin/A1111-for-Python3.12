@@ -572,6 +572,21 @@ def prepare_environment():
     except ImportError:
         run_pip("install --force-reinstall --no-cache-dir protobuf==7.34.1", "protobuf", live=False)
 
+    # Ensure mediapipe (for ADetailer builtin) without downgrading protobuf.
+    # mediapipe<=0.10.15 declares protobuf<5, which would fight pinned protobuf==7.34.1.
+    # Installing with --no-deps keeps protobuf untouched; generated *_pb2 modules in
+    # mediapipe are runtime-compatible with protobuf 5+/7+.
+    try:
+        import importlib.util as _ilu
+        if _ilu.find_spec("mediapipe") is None:
+            run_pip(
+                "install --no-deps --prefer-binary \"mediapipe>=0.10.13,<=0.10.15\"",
+                "mediapipe (no-deps)",
+                live=False,
+            )
+    except Exception as _e:
+        print(f"[WARNING] Could not ensure mediapipe via --no-deps: {_e}")
+
     if not os.path.isfile(requirements_file_for_npu):
         requirements_file_for_npu = os.path.join(script_path, requirements_file_for_npu)
 

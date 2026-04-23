@@ -12,6 +12,7 @@ This document contains release notes for versions v1.01 through v1.04 of `ussoew
 - **Updated**: ADetailer runtime dependencies are integrated into main Python 3.12 requirement files (`requirements_versions_py312.txt` and `requirements_versions_py312_windows.txt`) to ensure install-time consistency.
 - **Updated**: `extensions-builtin/adetailer/install.py` now skips its own pip install path when loaded from `extensions-builtin`, preventing duplicate dependency installation.
 - **Fixed**: Startup no longer crashes when the default `localizations` directory is missing (`modules/localization.py` now checks directory existence before listing).
+- **Fixed**: Removed `mediapipe` from global requirements to resolve pip dependency conflict with pinned `protobuf==7.34.1` + `tensorflow==2.20.0`; mediapipe is now ensured via no-deps install path so ADetailer mediapipe detectors remain usable without downgrading protobuf.
 
 ---
 

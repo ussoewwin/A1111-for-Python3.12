@@ -14,6 +14,14 @@ _ADETAILER_ROOT = os.path.dirname(os.path.abspath(__file__))
 _BUILTIN_SUFFIX = os.path.join("extensions-builtin", "adetailer")
 _IS_BUILTIN = os.path.normpath(_ADETAILER_ROOT).endswith(_BUILTIN_SUFFIX)
 
+# mediapipe requirements:
+#   mediapipe <=0.10.15 depends on protobuf<5
+#   this project pins protobuf==7.34.1 for tensorflow>=2.20
+# We install mediapipe with --no-deps so pip will not attempt to downgrade protobuf.
+# Generated *_pb2 modules in mediapipe are runtime-compatible with protobuf 5+/7+.
+_MEDIAPIPE_MIN = "0.10.13"
+_MEDIAPIPE_MAX = "0.10.15"
+
 
 def is_installed(
     package: str,
@@ -48,14 +56,30 @@ def run_pip(*args):
     subprocess.run([sys.executable, "-m", "pip", "install", *args], check=True)
 
 
+def ensure_mediapipe():
+    """Install mediapipe with --no-deps to avoid forcing protobuf<5.
+
+    Runs for both external-extension and built-in modes because mediapipe is
+    intentionally excluded from the main requirements to prevent the pip
+    resolver from downgrading protobuf.
+    """
+    if is_installed("mediapipe", _MEDIAPIPE_MIN, _MEDIAPIPE_MAX):
+        return
+    spec = f"mediapipe>={_MEDIAPIPE_MIN},<={_MEDIAPIPE_MAX}"
+    try:
+        run_pip("--no-deps", "--prefer-binary", spec)
+    except subprocess.CalledProcessError as e:
+        print(f"[-] ADetailer: Failed to install {spec} with --no-deps: {e}")
+
+
 def install():
     if _IS_BUILTIN:
+        ensure_mediapipe()
         return
 
     deps = [
         # requirements
         ("ultralytics", "8.3.75", None),
-        ("mediapipe", "0.10.13", "0.10.15"),
         ("rich", "13.0.0", None),
     ]
 
@@ -75,6 +99,8 @@ def install():
     if pkgs:
         run_pip(*pkgs)
 
+    ensure_mediapipe()
+
 
 try:
     import launch
@@ -83,5 +109,5 @@ try:
 except Exception:
     skip_install = False
 
-if not skip_install and not _IS_BUILTIN:
+if not skip_install:
     install()
