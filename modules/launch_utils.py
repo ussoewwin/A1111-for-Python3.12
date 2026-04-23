@@ -284,6 +284,36 @@ def run_extensions_installers(settings_file):
                 startup_timer.record(dirname_extension)
 
 
+def migrate_multidiffusion_to_builtin():
+    """Ensure multidiffusion-upscaler is treated as built-in extension."""
+    ext_name = "multidiffusion-upscaler-for-automatic1111"
+    src = os.path.join(extensions_dir, ext_name)
+    dst_root = os.path.join(script_path, "extensions-builtin")
+    dst = os.path.join(dst_root, ext_name)
+
+    if not os.path.isdir(src):
+        return
+
+    try:
+        os.makedirs(dst_root, exist_ok=True)
+
+        if os.path.isdir(dst):
+            print(f"[INFO] Built-in {ext_name} already exists; keeping built-in copy.")
+        else:
+            shutil.move(src, dst)
+            print(f"[INFO] Migrated {ext_name} from extensions/ to extensions-builtin/.")
+
+        git_path = os.path.join(dst, ".git")
+        if os.path.isdir(git_path):
+            shutil.rmtree(git_path, ignore_errors=True)
+            print(f"[INFO] Removed nested .git from built-in {ext_name}.")
+        elif os.path.isfile(git_path):
+            os.remove(git_path)
+            print(f"[INFO] Removed .git file marker from built-in {ext_name}.")
+    except Exception as e:
+        print(f"[WARNING] Failed to migrate {ext_name} to built-in: {e}")
+
+
 re_requirement = re.compile(r"\s*([-_a-zA-Z0-9]+)\s*(?:==\s*([-+_.a-zA-Z0-9]+))?\s*")
 
 
@@ -393,6 +423,8 @@ def prepare_environment():
         check_python_version()
 
     startup_timer.record("checks")
+    migrate_multidiffusion_to_builtin()
+    startup_timer.record("migrate multidiffusion builtin")
 
     commit = commit_hash()
     tag = git_tag()
