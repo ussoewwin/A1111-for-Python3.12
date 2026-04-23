@@ -207,6 +207,19 @@ See [`md/LINUX_MAC_PY312_STARTUP_FIX.md`](md/LINUX_MAC_PY312_STARTUP_FIX.md) for
 
 See [`md/CHANGELOG.md`](md/CHANGELOG.md) for the full change history.
 
+## License
+
+This project is licensed under **AGPL-3.0** (GNU Affero General Public License v3.0).
+
+### Licenses of bundled components
+
+This repository includes built-in components with their own licenses:
+
+- **stable-diffusion-webui (base project)** - AGPL-3.0
+- **ADetailer** (`extensions-builtin/adetailer`) - AGPL-3.0
+
+Please check each component directory for original license texts and notices.
+
 ## Documentation
 
 For detailed features, installation instructions, and usage documentation, please refer to the official upstream repository:
