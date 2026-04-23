@@ -1,6 +1,17 @@
-# Release Notes (v1.01 to v1.03)
+# Release Notes (v1.01 to v1.04)
 
-This document contains release notes for versions v1.01 through v1.03 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.04 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.04
+
+*Tag range: `1.03`..`1.04` (2026-04-23)*
+
+- **Added**: ADetailer is now vendored as a built-in extension under `extensions-builtin/adetailer` (no nested `.git`), so it ships with the main repository.
+- **Updated**: ADetailer runtime dependencies are integrated into main Python 3.12 requirement files (`requirements_versions_py312.txt` and `requirements_versions_py312_windows.txt`) to ensure install-time consistency.
+- **Updated**: `extensions-builtin/adetailer/install.py` now skips its own pip install path when loaded from `extensions-builtin`, preventing duplicate dependency installation.
+- **Fixed**: Startup no longer crashes when the default `localizations` directory is missing (`modules/localization.py` now checks directory existence before listing).
 
 ---
 
