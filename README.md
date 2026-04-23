@@ -211,14 +211,14 @@ See [`md/CHANGELOG.md`](md/CHANGELOG.md) for the full change history.
 
 This project is licensed under **AGPL-3.0** (GNU Affero General Public License v3.0).
 
-### Licenses of bundled components
+### Licenses of Base Repositories
 
-This repository includes built-in components with their own licenses:
+This project is built upon the following repositories, each with their respective licenses:
 
-- **stable-diffusion-webui (base project)** - AGPL-3.0
-- **ADetailer** (`extensions-builtin/adetailer`) - AGPL-3.0
+- **[stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)** - AGPL-3.0
+- **[ADetailer](https://github.com/Bing-su/adetailer)** - AGPL-3.0
 
-Please check each component directory for original license texts and notices.
+See [LICENSE](LICENSE) file for details.
 
 ## Documentation
 
