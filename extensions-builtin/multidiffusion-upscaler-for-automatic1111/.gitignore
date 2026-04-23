@@ -1,0 +1,13 @@
+# meta
+.vscode/
+__pycache__/
+.DS_Store
+
+# settings
+region_configs/
+
+# test images
+deflicker/input_frames/*
+
+# test features
+deflicker/*
