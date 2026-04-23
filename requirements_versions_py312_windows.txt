@@ -36,3 +36,9 @@ transformers==5.4.0
 httpx==0.24.1
 pillow-avif-plugin==1.4.3
 peft==0.15.2
+
+# ADetailer (extensions-builtin): was install.py; unified here
+ultralytics>=8.3.75
+mediapipe>=0.10.13,<=0.10.15
+rich>=13.0.0
+huggingface_hub>=0.20.0
