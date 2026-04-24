@@ -1,6 +1,15 @@
-# Release Notes (v1.01 to v1.04)
+# Release Notes (v1.01 to v1.05)
 
-This document contains release notes for versions v1.01 through v1.04 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.05 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.05
+
+*Tag range: `1.04`..`1.05`*
+
+- **Added**: **Multidiffusion upscaler** (`multidiffusion-upscaler-for-automatic1111`) is now vendored as a built-in extension under `extensions-builtin/multidiffusion-upscaler-for-automatic1111` (no nested `.git`), same pattern as other built-ins.
+- **Added**: On startup, if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` and any nested `.git` under the built-in copy is removed (`migrate_multidiffusion_to_builtin` in `modules/launch_utils.py`).
 
 ---
 
