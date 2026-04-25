@@ -6,11 +6,12 @@ requires-python = ">=3.9"
 readme = "README.md"
 license = { text = "AGPL-3.0" }
 dependencies = [
-    "ultralytics>=8.2",
-    "mediapipe>=0.10.13",
+    "ultralytics>=8.3.0",  # Updated for YOLOv11 support
     "pydantic<3",
     "rich>=13",
     "huggingface_hub",
+    "requests",  # For YOLOv11 model download
+    # InsightFace is installed manually via install.py for Python 3.13 compatibility
 ]
 keywords = [
     "stable-diffusion",
@@ -25,7 +26,7 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
-repository = "https://github.com/Bing-su/adetailer"
+repository = "https://github.com/ussoewwin/ADetailer_without_mediapipe"
 
 [project.optional-dependencies]
 dev = ["ruff", "pre-commit", "devtools"]

@@ -37,8 +37,8 @@ from adetailer import (
     ADETAILER,
     __version__,
     get_models,
-    mediapipe_predict,
     ultralytics_predict,
+    hybrid_face_predict,
 )
 from adetailer.args import (
     BBOX_SORTBY,
@@ -84,12 +84,27 @@ if TYPE_CHECKING:
 PARAMS_TXT = "params.txt"
 
 no_huggingface = getattr(cmd_opts, "ad_no_huggingface", False)
+
+# Forge: ADetailer models in extensions/adetailer/models
+# Also check legacy models/adetailer
 adetailer_dir = Path(paths.models_path, "adetailer")
-safe_mkdir(adetailer_dir)
+adetailer_ext_dir = Path(__file__).parent.parent / "models"
+
+# Check both dirs
+model_dirs = []
+if adetailer_ext_dir.exists():
+    model_dirs.append(adetailer_ext_dir)
+if adetailer_dir.exists():
+    model_dirs.append(adetailer_dir)
+
+# Create dir if missing
+if not model_dirs:
+    safe_mkdir(adetailer_dir)
+    model_dirs.append(adetailer_dir)
 
 extra_models_dirs = shared.opts.data.get("ad_extra_models_dir", "")
 model_mapping = get_models(
-    adetailer_dir,
+    *model_dirs,
     *extra_models_dirs.split("|"),
     huggingface=not no_huggingface,
 )
@@ -819,14 +834,25 @@ class AfterDetailerScript(scripts.Script):
         i2i = self.get_i2i_p(p, args, pp.image)
         ad_prompts, ad_negatives = self.get_prompt(p, args)
 
-        is_mediapipe = args.is_mediapipe()
-
-        if is_mediapipe:
-            pred = mediapipe_predict(args.ad_model, pp.image, args.ad_confidence)
-
-        else:
-            ad_model = self.get_ad_model(args.ad_model)
-            with disable_safe_unpickle():
+        # Use hybrid detection for face models (YOLO + InsightFace)
+        ad_model = self.get_ad_model(args.ad_model)
+        is_face_model = "face" in args.ad_model.lower()
+        
+        with disable_safe_unpickle():
+            if is_face_model:
+                # Use hybrid detection for better accuracy on SDXL/Pony
+                # Lower YOLO confidence slightly for anime styles
+                yolo_confidence = max(0.25, args.ad_confidence * 0.85)
+                pred = hybrid_face_predict(
+                    model_path=ad_model,
+                    image=pp.image,
+                    confidence=yolo_confidence,
+                    device=self.ultralytics_device,
+                    classes=args.ad_model_classes,
+                    use_insightface=True,
+                    insightface_confidence=max(0.2, args.ad_confidence - 0.15),  # Lower threshold for Pony
+                )
+            else:
                 pred = ultralytics_predict(
                     ad_model,
                     image=pp.image,
@@ -855,8 +881,7 @@ class AfterDetailerScript(scripts.Script):
         processed = None
         state.job_count += steps
 
-        if is_mediapipe:
-            print(f"mediapipe: {steps} detected.")
+        print(f"ADetailer: {steps} detected.")
 
         p2 = copy(i2i)
         for j in range(steps):
@@ -909,11 +934,18 @@ class AfterDetailerScript(scripts.Script):
                 p.scripts.postprocess(copy(p), dummy)
 
         is_processed = False
+        face_already_processed = False
         with CNHijackRestore(), pause_total_tqdm(), cn_allow_script_control():
             for n, args in enumerate(arg_list):
                 if args.need_skip():
                     continue
-                is_processed |= self._postprocess_image_inner(p, pp, args, n=n)
+                is_face_tab = "face" in args.ad_model.lower()
+                if is_face_tab and face_already_processed:
+                    continue
+                ran = self._postprocess_image_inner(p, pp, args, n=n)
+                if ran and is_face_tab:
+                    face_already_processed = True
+                is_processed |= ran
 
         if is_processed and not is_skip_img2img(p):
             self.save_image(

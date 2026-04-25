@@ -38,10 +38,6 @@ pillow-avif-plugin==1.4.3
 peft==0.15.2
 
 # ADetailer (extensions-builtin): was install.py; unified here
-# NOTE: mediapipe is intentionally NOT listed here because
-# mediapipe <=0.10.15 declares protobuf<5, which would downgrade the pinned protobuf==7.34.1.
-# It is installed by extensions-builtin/adetailer/install.py with `pip install --no-deps`
-# so protobuf is not touched, and all mediapipe_* detectors remain functional.
 ultralytics>=8.3.75
 rich>=13.0.0
 huggingface_hub>=0.20.0

@@ -13,19 +13,33 @@ from adetailer import ADETAILER, __version__
 from adetailer.args import ALL_ARGS, MASK_MERGE_INVERT
 from controlnet_ext import controlnet_exists, controlnet_type, get_cn_models
 
-if controlnet_type == "forge":
-    from lib_controlnet import global_state
+def get_cn_module_choices():
+    """Lazy-eval ControlNet module choices"""
+    if controlnet_type == "forge":
+        try:
+            from lib_controlnet import global_state
+            
+            from modules_forge.shared import supported_preprocessors
+            if "None" not in supported_preprocessors:
+                return get_default_cn_module_choices()
+            
+            return {
+                "inpaint": list(global_state.get_filtered_preprocessors("Inpaint")),
+                "lineart": list(global_state.get_filtered_preprocessors("Lineart")),
+                "openpose": list(global_state.get_filtered_preprocessors("OpenPose")),
+                "tile": list(global_state.get_filtered_preprocessors("Tile")),
+                "scribble": list(global_state.get_filtered_preprocessors("Scribble")),
+                "depth": list(global_state.get_filtered_preprocessors("Depth")),
+            }
+        except (KeyError, AttributeError, ImportError):
+            return get_default_cn_module_choices()
+    else:
+        return get_default_cn_module_choices()
 
-    cn_module_choices = {
-        "inpaint": list(global_state.get_filtered_preprocessors("Inpaint")),
-        "lineart": list(global_state.get_filtered_preprocessors("Lineart")),
-        "openpose": list(global_state.get_filtered_preprocessors("OpenPose")),
-        "tile": list(global_state.get_filtered_preprocessors("Tile")),
-        "scribble": list(global_state.get_filtered_preprocessors("Scribble")),
-        "depth": list(global_state.get_filtered_preprocessors("Depth")),
-    }
-else:
-    cn_module_choices = {
+
+def get_default_cn_module_choices():
+    """Default ControlNet module choices"""
+    return {
         "inpaint": [
             "inpaint_global_harmonious",
             "inpaint_only",
@@ -43,8 +57,18 @@ else:
         "depth": ["depth_midas", "depth_hand_refiner"],
     }
 
-union = list(chain.from_iterable(cn_module_choices.values()))
-cn_module_choices["union"] = union
+
+cn_module_choices_cache = None
+
+
+def get_cn_module_choices_cached():
+    """Cached ControlNet module choices"""
+    global cn_module_choices_cache
+    if cn_module_choices_cache is None:
+        cn_module_choices_cache = get_cn_module_choices()
+        union = list(chain.from_iterable(cn_module_choices_cache.values()))
+        cn_module_choices_cache["union"] = union
+    return cn_module_choices_cache
 
 
 class Widgets(SimpleNamespace):
@@ -101,6 +125,7 @@ def on_ad_model_update(model: str):
 
 
 def on_cn_model_update(cn_model_name: str):
+    cn_module_choices = get_cn_module_choices_cached()
     cn_model_name = cn_model_name.replace("inpaint_depth", "depth")
     for t in cn_module_choices:
         if t in cn_model_name:
@@ -173,11 +198,8 @@ def one_ui_group(n: int, is_img2img: bool, webui_info: WebuiInfo):
     w = Widgets()
     eid = partial(elem_id, n=n, is_img2img=is_img2img)
 
-    model_choices = (
-        [*webui_info.ad_model_list, "None"]
-        if n == 0
-        else ["None", *webui_info.ad_model_list]
-    )
+    # Use the model list from get_models which already has correct priority order
+    model_choices = list(webui_info.ad_model_list) + ["None"]
 
     with gr.Group():
         with gr.Row(variant="compact"):
@@ -189,10 +211,12 @@ def one_ui_group(n: int, is_img2img: bool, webui_info: WebuiInfo):
             )
 
         with gr.Row():
+            # Default to face_yolo11n.pt for compatibility
+            default_model = "face_yolo11n.pt" if "face_yolo11n.pt" in model_choices else (model_choices[0] if model_choices else "None")
             w.ad_model = gr.Dropdown(
                 label="ADetailer detector" + suffix(n),
                 choices=model_choices,
-                value=model_choices[0],
+                value=default_model,  # Default to YOLOv11n
                 visible=True,
                 type="value",
                 elem_id=eid("ad_model"),
