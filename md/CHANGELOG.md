@@ -1,6 +1,16 @@
-# Release Notes (v1.01 to v1.05)
+# Release Notes (v1.01 to v1.06)
 
-This document contains release notes for versions v1.01 through v1.05 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.06 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.06
+
+*Tag range: `1.05`..`1.06`*
+
+- **Added**: **WD14-tagger** (`stable-diffusion-webui-wd14-tagger`) is now vendored as a built-in extension under `extensions-builtin/stable-diffusion-webui-wd14-tagger` (no nested `.git`), same pattern as other built-ins.
+- **Updated**: WD14-tagger runtime dependencies are integrated into main Python 3.12 requirement files (`requirements_versions_py312.txt` and `requirements_versions_py312_windows.txt`) to ensure install-time consistency. Only packages not already covered by the main list are added (`deepdanbooru`, `jsonschema`, `opencv_contrib_python`).
+- **Updated**: `extensions-builtin/stable-diffusion-webui-wd14-tagger/install.py` now skips its own pip install path when loaded from `extensions-builtin`, preventing duplicate dependency installation.
 
 ---
 
