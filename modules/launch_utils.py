@@ -462,10 +462,40 @@ def prepare_environment():
         check_python_version()
 
     startup_timer.record("checks")
+
+
+def migrate_freeu_to_builtin():
+    """Ensure sd-webui-freeu is treated as built-in extension."""
+    ext_name = "sd-webui-freeu"
+    src = os.path.join(extensions_dir, ext_name)
+    dst_root = os.path.join(script_path, "extensions-builtin")
+    dst = os.path.join(dst_root, ext_name)
+
+    if not os.path.isdir(src):
+        return
+
+    if os.path.isdir(dst):
+        git_path = os.path.join(dst, ".git")
+        if os.path.isdir(git_path):
+            shutil.rmtree(git_path, ignore_errors=True)
+            print(f"[INFO] Removed nested .git from existing built-in {ext_name}.")
+        return
+
+    shutil.move(src, dst)
+    print(f"[INFO] Migrated {ext_name} from extensions/ to extensions-builtin/.")
+
+    git_path = os.path.join(dst, ".git")
+    if os.path.isdir(git_path):
+        shutil.rmtree(git_path, ignore_errors=True)
+        print(f"[INFO] Removed nested .git from built-in {ext_name}.")
+
     migrate_multidiffusion_to_builtin()
     startup_timer.record("migrate multidiffusion builtin")
     migrate_sd_dynamic_thresholding_to_builtin()
     startup_timer.record("migrate sd-dynamic-thresholding builtin")
+    migrate_freeu_to_builtin()
+    startup_timer.record("migrate freeu builtin")
+
 
     commit = commit_hash()
     tag = git_tag()
