@@ -1,6 +1,14 @@
-# Release Notes (v1.01 to v1.08)
+# Release Notes (v1.01 to v1.09)
 
-This document contains release notes for versions v1.01 through v1.08 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.09 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.09
+
+- **Added**: **FreeU** (`sd-webui-freeu`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-freeu` (no nested `.git`), same pattern as other built-ins.
+- **Added**: On startup, if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_freeu_to_builtin` in `modules/launch_utils.py`).
+- **Note**: FreeU has no external Python package dependencies beyond stdlib; no entries added to requirement files.
 
 ---
 
@@ -11,16 +19,6 @@ This document contains release notes for versions v1.01 through v1.08 of `ussoew
 - **Added**: **sd-dynamic-thresholding** (`sd-dynamic-thresholding`) is now vendored as a built-in extension under `extensions-builtin/sd-dynamic-thresholding` (no nested `.git`), same pattern as other built-ins.
 - **Added**: On startup, nested `.git` under the built-in copy is removed; if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_sd_dynamic_thresholding_to_builtin` in `modules/launch_utils.py`).
 - **Updated**: `README.md` — license section lists the upstream repository and MIT license.
-
----
-
-## v1.09
-
-*Tag range: `1.08`..`1.09`*
-
-- **Added**: **FreeU** (`sd-webui-freeu`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-freeu` (no nested `.git`), same pattern as other built-ins.
-- **Added**: On startup, if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_freeu_to_builtin` in `modules/launch_utils.py`).
-- **Note**: FreeU has no external Python package dependencies beyond stdlib; no entries added to requirement files.
 
 ---
 
