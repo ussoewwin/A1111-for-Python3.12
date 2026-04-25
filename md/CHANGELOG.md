@@ -1,6 +1,16 @@
-# Release Notes (v1.01 to v1.06)
+# Release Notes (v1.01 to v1.07)
 
-This document contains release notes for versions v1.01 through v1.06 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.07 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.07
+
+*Tag range: `1.06`..`1.07`*
+
+- **Updated**: ADetailer face detection completely replaced — `mediapipe` is no longer used; all mediapipe-based models (`mediapipe_face_short`, `mediapipe_face_full`, `mediapipe_face_mesh`, `mediapipe_face_mesh_eyes_only`) now route through InsightFace.
+- **Fixed**: Removed mediapipe `--no-deps` install logic from `modules/launch_utils.py` (no longer needed).
+- **Fixed**: Cleaned up mediapipe-related comments from `requirements_versions_py312.txt` and `requirements_versions_py312_windows.txt`.
 
 ---
 
@@ -32,6 +42,7 @@ This document contains release notes for versions v1.01 through v1.06 of `ussoew
 - **Updated**: `extensions-builtin/adetailer/install.py` now skips its own pip install path when loaded from `extensions-builtin`, preventing duplicate dependency installation.
 - **Fixed**: Startup no longer crashes when the default `localizations` directory is missing (`modules/localization.py` now checks directory existence before listing).
 - **Fixed**: Removed `mediapipe` from global requirements to resolve pip dependency conflict with pinned `protobuf==7.34.1` + `tensorflow==2.20.0`; mediapipe is now ensured via no-deps install path so ADetailer mediapipe detectors remain usable without downgrading protobuf.
+- **Fixed**: [v1.07 backport] Replaced `mediapipe` with `insightface` for all ADetailer face detection; mediapipe dependency and `--no-deps` install logic completely removed from the main codebase.
 
 ---
 

@@ -5,6 +5,7 @@ on:
     paths:
       - "adetailer/**.py"
   workflow_call:
+  workflow_dispatch:
   schedule:
     - cron: "0 0 * * 0"
 
@@ -25,6 +26,10 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache-dependency-glob: "pyproject.toml"
+
+      - name: Install clip for YOLO-world support
+        run: uv pip install git+https://github.com/ultralytics/CLIP.git
 
       - name: Run tests
         run: uv run --all-extras pytest -v

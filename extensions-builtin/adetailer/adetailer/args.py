@@ -54,7 +54,7 @@ class ArgsList(UserList):
 
 
 class ADetailerArgs(BaseModel, extra=Extra.forbid):
-    ad_model: str = "None"
+    ad_model: str = "face_yolo11n.pt"  # Default to YOLOv11n for compatibility
     ad_model_classes: str = ""
     ad_tab_enable: bool = True
     ad_prompt: str = ""
@@ -73,8 +73,8 @@ class ADetailerArgs(BaseModel, extra=Extra.forbid):
     ad_inpaint_only_masked: bool = True
     ad_inpaint_only_masked_padding: NonNegativeInt = 32
     ad_use_inpaint_width_height: bool = False
-    ad_inpaint_width: PositiveInt = 512
-    ad_inpaint_height: PositiveInt = 512
+    ad_inpaint_width: PositiveInt = 1024  # SDXL default resolution
+    ad_inpaint_height: PositiveInt = 1024
     ad_use_steps: bool = False
     ad_steps: PositiveInt = 28
     ad_use_cfg_scale: bool = False
@@ -207,9 +207,6 @@ class ADetailerArgs(BaseModel, extra=Extra.forbid):
             p = {k + suffix: v for k, v in p.items()}
 
         return p
-
-    def is_mediapipe(self) -> bool:
-        return self.ad_model.lower().startswith("mediapipe")
 
     def need_skip(self) -> bool:
         return self.ad_model == "None" or self.ad_tab_enable is False

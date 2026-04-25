@@ -196,3 +196,6 @@ pyrightconfig.json
 *.ipynb
 node_modules
 modules
+
+# Model files (downloaded automatically from HuggingFace)
+models/
