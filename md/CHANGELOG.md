@@ -14,6 +14,16 @@ This document contains release notes for versions v1.01 through v1.08 of `ussoew
 
 ---
 
+## v1.09
+
+*Tag range: `1.08`..`1.09`*
+
+- **Added**: **FreeU** (`sd-webui-freeu`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-freeu` (no nested `.git`), same pattern as other built-ins.
+- **Added**: On startup, if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_freeu_to_builtin` in `modules/launch_utils.py`).
+- **Note**: FreeU has no external Python package dependencies beyond stdlib; no entries added to requirement files.
+
+---
+
 ## v1.07
 
 *Tag range: `1.06`..`1.07`*
