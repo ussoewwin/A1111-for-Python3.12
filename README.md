@@ -219,6 +219,7 @@ This project is built upon the following repositories, each with their respectiv
 - **[ADetailer](https://github.com/Bing-su/adetailer)** - AGPL-3.0
 - **[multidiffusion-upscaler-for-automatic1111](https://github.com/pkuliyi2015/multidiffusion-upscaler-for-automatic1111)** - CC BY-NC-SA 4.0
 - **[stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger)** - Public Domain
+- **[sd-dynamic-thresholding](https://github.com/mcmonkeyprojects/sd-dynamic-thresholding)** - MIT
 
 See [LICENSE](LICENSE) file for details.
 

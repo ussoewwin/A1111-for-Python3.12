@@ -1,6 +1,16 @@
-# Release Notes (v1.01 to v1.07)
+# Release Notes (v1.01 to v1.08)
 
-This document contains release notes for versions v1.01 through v1.07 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.08 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.08
+
+*Tag range: `1.07`..`1.08`*
+
+- **Added**: **sd-dynamic-thresholding** (`sd-dynamic-thresholding`) is now vendored as a built-in extension under `extensions-builtin/sd-dynamic-thresholding` (no nested `.git`), same pattern as other built-ins.
+- **Added**: On startup, nested `.git` under the built-in copy is removed; if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_sd_dynamic_thresholding_to_builtin` in `modules/launch_utils.py`).
+- **Updated**: `README.md` — license section lists the upstream repository and MIT license.
 
 ---
 
