@@ -353,6 +353,45 @@ def migrate_sd_dynamic_thresholding_to_builtin():
         print(f"[WARNING] Failed to migrate {ext_name} to built-in: {e}")
 
 
+def migrate_freeu_to_builtin():
+    """Ensure sd-webui-freeu is treated as built-in extension."""
+    ext_name = "sd-webui-freeu"
+    src = os.path.join(extensions_dir, ext_name)
+    dst_root = os.path.join(script_path, "extensions-builtin")
+    dst = os.path.join(dst_root, ext_name)
+
+    if os.path.isdir(dst):
+        git_path = os.path.join(dst, ".git")
+        if os.path.isdir(git_path):
+            shutil.rmtree(git_path, ignore_errors=True)
+            print(f"[INFO] Removed nested .git from built-in {ext_name}.")
+        elif os.path.isfile(git_path):
+            os.remove(git_path)
+            print(f"[INFO] Removed .git file marker from built-in {ext_name}.")
+
+    if not os.path.isdir(src):
+        return
+
+    try:
+        os.makedirs(dst_root, exist_ok=True)
+
+        if os.path.isdir(dst):
+            print(f"[INFO] Built-in {ext_name} already exists; keeping built-in copy.")
+        else:
+            shutil.move(src, dst)
+            print(f"[INFO] Migrated {ext_name} from extensions/ to extensions-builtin/.")
+
+        git_path = os.path.join(dst, ".git")
+        if os.path.isdir(git_path):
+            shutil.rmtree(git_path, ignore_errors=True)
+            print(f"[INFO] Removed nested .git from built-in {ext_name}.")
+        elif os.path.isfile(git_path):
+            os.remove(git_path)
+            print(f"[INFO] Removed .git file marker from built-in {ext_name}.")
+    except Exception as e:
+        print(f"[WARNING] Failed to migrate {ext_name} to built-in: {e}")
+
+
 re_requirement = re.compile(r"\s*([-_a-zA-Z0-9]+)\s*(?:==\s*([-+_.a-zA-Z0-9]+))?\s*")
 
 
@@ -462,40 +501,12 @@ def prepare_environment():
         check_python_version()
 
     startup_timer.record("checks")
-
-
-def migrate_freeu_to_builtin():
-    """Ensure sd-webui-freeu is treated as built-in extension."""
-    ext_name = "sd-webui-freeu"
-    src = os.path.join(extensions_dir, ext_name)
-    dst_root = os.path.join(script_path, "extensions-builtin")
-    dst = os.path.join(dst_root, ext_name)
-
-    if not os.path.isdir(src):
-        return
-
-    if os.path.isdir(dst):
-        git_path = os.path.join(dst, ".git")
-        if os.path.isdir(git_path):
-            shutil.rmtree(git_path, ignore_errors=True)
-            print(f"[INFO] Removed nested .git from existing built-in {ext_name}.")
-        return
-
-    shutil.move(src, dst)
-    print(f"[INFO] Migrated {ext_name} from extensions/ to extensions-builtin/.")
-
-    git_path = os.path.join(dst, ".git")
-    if os.path.isdir(git_path):
-        shutil.rmtree(git_path, ignore_errors=True)
-        print(f"[INFO] Removed nested .git from built-in {ext_name}.")
-
     migrate_multidiffusion_to_builtin()
     startup_timer.record("migrate multidiffusion builtin")
     migrate_sd_dynamic_thresholding_to_builtin()
     startup_timer.record("migrate sd-dynamic-thresholding builtin")
     migrate_freeu_to_builtin()
     startup_timer.record("migrate freeu builtin")
-
 
     commit = commit_hash()
     tag = git_tag()
