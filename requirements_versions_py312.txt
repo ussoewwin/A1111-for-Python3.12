@@ -45,3 +45,14 @@ peft==0.15.2
 ultralytics>=8.3.75
 rich>=13.0.0
 huggingface_hub>=0.20.0
+
+# WD14-tagger (extensions-builtin): was install.py; unified here
+# Only packages NOT already pinned or implied elsewhere are listed here.
+deepdanbooru
+jsonschema
+opencv_contrib_python
+
+# WD14-tagger (extensions-builtin): was install.py; unified here
+deepdanbooru
+jsonschema
+opencv_contrib_python
