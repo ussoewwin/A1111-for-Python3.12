@@ -38,6 +38,18 @@ pillow-avif-plugin==1.4.3
 peft==0.15.2
 
 # ADetailer (extensions-builtin): was install.py; unified here
+
+# sd-webui-controlnet (extensions-builtin): was install.py; unified here
+# mediapipe excluded per project policy (v1.07)
+fvcore
+opencv-python>=4.8.0
+svglib
+addict
+yapf
+albumentations==1.4.3
+matplotlib
+pydantic<=1.10.17
+controlnet_aux>=0.0.9
 ultralytics>=8.3.75
 rich>=13.0.0
 huggingface_hub>=0.20.0

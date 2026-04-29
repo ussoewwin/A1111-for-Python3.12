@@ -1,6 +1,15 @@
-# Release Notes (v1.01 to v1.10)
+# Release Notes (v1.01 to v1.11)
 
-This document contains release notes for versions v1.01 through v1.10 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.11 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.11
+
+- **Added**: **ControlNet** (`sd-webui-controlnet`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-controlnet` (no nested `.git`), same pattern as other built-ins.
+- **Added**: On startup, if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_controlnet_to_builtin` in `modules/launch_utils.py`).
+- **Added**: ControlNet runtime dependencies are integrated into main Python 3.12 requirement files (`requirements_versions_py312.txt` and `requirements_versions_py312_windows.txt`). Note: `mediapipe` is excluded per project policy (v1.07).
+- **Removed**: `install.py` from built-in copy; dependencies are now managed by the main requirement files.
 
 ---
 

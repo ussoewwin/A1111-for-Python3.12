@@ -217,6 +217,7 @@ This project is built upon the following repositories, each with their respectiv
 
 - **[stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)** - AGPL-3.0
 - **[ADetailer](https://github.com/Bing-su/adetailer)** - AGPL-3.0
+- **[sd-webui-controlnet](https://github.com/Mikubill/sd-webui-controlnet)** - GPL-3.0
 - **[multidiffusion-upscaler-for-automatic1111](https://github.com/pkuliyi2015/multidiffusion-upscaler-for-automatic1111)** - CC BY-NC-SA 4.0
 - **[stable-diffusion-webui-wd14-tagger](https://github.com/picobyte/stable-diffusion-webui-wd14-tagger)** - Public Domain
 - **[ControlAltAI-Nodes](https://github.com/gseth/ControlAltAI-Nodes)** - MIT
