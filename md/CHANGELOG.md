@@ -4,14 +4,6 @@ This document contains release notes for versions v1.01 through v1.10 of `ussoew
 
 ---
 
-## v1.10
-
-- **Added**: **Aspect Ratio selector** (`sd-webui-ar`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-ar` (no nested `.git`), same pattern as other built-ins.
-- **Added**: On startup, if the extension still exists under `extensions/`, it is automatically moved to `extensions-builtin/` (`migrate_ar_to_builtin` in `modules/launch_utils.py`).
-- **Note**: sd-webui-ar has no external Python package dependencies; no entries added to requirement files.
-
----
-
 ## v1.09
 
 - **Added**: **FreeU** (`sd-webui-freeu`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-freeu` (no nested `.git`), same pattern as other built-ins.
