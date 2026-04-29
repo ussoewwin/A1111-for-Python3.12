@@ -4,6 +4,14 @@ This document contains release notes for versions v1.01 through v1.10 of `ussoew
 
 ---
 
+## v1.10
+
+- **Added**: **Aspect Ratio selector** (`forge_aspect_ratio`) is added as a built-in extension under `extensions-builtin/forge_aspect_ratio`.
+- **Added**: Built-in aspect ratio logic is adapted from **ControlAltAI-Nodes** for A1111 integration.
+- **Updated**: Replaced previous AR implementation (`sd-webui-ar`) with the new built-in aspect ratio extension.
+
+---
+
 ## v1.09
 
 - **Added**: **FreeU** (`sd-webui-freeu`) is now vendored as a built-in extension under `extensions-builtin/sd-webui-freeu` (no nested `.git`), same pattern as other built-ins.
