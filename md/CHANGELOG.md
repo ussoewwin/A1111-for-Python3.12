@@ -1,6 +1,14 @@
-# Release Notes (v1.01 to v1.11)
+# Release Notes (v1.01 to v1.12)
 
-This document contains release notes for versions v1.01 through v1.11 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.12 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.12
+
+- **Summary**: Unified SciPy install flow across all platforms to install `scipy==1.16.1` from PyPI, removing the Windows-specific HuggingFace wheel dependency that caused startup stalls.
+- **Updated**: `modules/launch_utils.py` now uses a single cross-platform SciPy install path (`pip install --no-cache-dir scipy==1.16.1`).
+- **Release Note**: Detailed release note document will be added later. (Link placeholder: `md/SCIPY_INSTALL_FIX_2026-04-30.md`)
 
 ---
 
