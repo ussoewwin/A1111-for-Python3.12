@@ -678,18 +678,10 @@ def prepare_environment():
         run_pip(f"install -r \"{requirements_file}\"", "requirements")
         startup_timer.record("install requirements")
     
-    # scipy install: platform-specific to match numpy 1.26.4 dtype layout
-    #   Windows: HuggingFace prebuilt cp312 win_amd64 wheel (forced via --no-index)
-    #   Linux/Mac: PyPI scipy==1.16.1 (manylinux/macosx wheel)
-    if platform.system() == "Windows":
-        scipy_wheel = os.environ.get('SCIPY_WHEEL', 'https://huggingface.co/ussoewwin/scipy-1.16.1-cp312-cp312-win_amd64/resolve/main/scipy-1.16.1-cp312-cp312-win_amd64.whl')
-        run(f'"{python}" -m pip uninstall scipy -y', "uninstalling scipy", "Couldn't uninstall scipy", live=False)
-        run(f'"{python}" -m pip install {scipy_wheel} --no-deps --no-index', "Installing scipy", "Couldn't install scipy", live=False)
-        print("[INFO] Installed scipy from HuggingFace to fix numpy dtype size incompatibility")
-    else:
-        run(f'"{python}" -m pip uninstall scipy -y', "uninstalling scipy", "Couldn't uninstall scipy", live=False)
-        run(f'"{python}" -m pip install --no-cache-dir scipy==1.16.1', "Installing scipy 1.16.1", "Couldn't install scipy 1.16.1", live=False)
-        print("[INFO] Installed scipy 1.16.1 from PyPI")
+    # scipy install: unified across platforms via PyPI to match numpy 1.26.4 dtype layout
+    run(f'"{python}" -m pip uninstall scipy -y', "uninstalling scipy", "Couldn't uninstall scipy", live=False)
+    run(f'"{python}" -m pip install --no-cache-dir scipy==1.16.1', "Installing scipy 1.16.1", "Couldn't install scipy 1.16.1", live=False)
+    print("[INFO] Installed scipy 1.16.1 from PyPI")
     
     # Auto-fix clip.py for Python 3.12 packaging import issue (AFTER requirements installation)
     def fix_clip_packaging_import():
