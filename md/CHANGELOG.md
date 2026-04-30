@@ -8,7 +8,7 @@ This document contains release notes for versions v1.01 through v1.12 of `ussoew
 
 - **Summary**: Unified SciPy install flow across all platforms to install `scipy==1.16.1` from PyPI, removing the Windows-specific HuggingFace wheel dependency that caused startup stalls.
 - **Updated**: `modules/launch_utils.py` now uses a single cross-platform SciPy install path (`pip install --no-cache-dir scipy==1.16.1`).
-- **Release Note**: Detailed release note document will be added later. (Link placeholder: `md/SCIPY_INSTALL_FIX_2026-04-30.md`)
+- **Release Note**: [SCIPY_INSTALL_FIX_2026-04-30.md](SCIPY_INSTALL_FIX_2026-04-30.md)
 
 ---
 
