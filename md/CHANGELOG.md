@@ -7,7 +7,7 @@ This document contains release notes for versions v1.01 through v1.13 of `ussoew
 ## v1.13
 
 - **Summary**: Hardened Multidiffusion Tiled VAE attention fallback behavior to avoid SDPA-triggered OOM cascades, with recovery-oriented fallback sequencing and detailed technical documentation.
-- **Release Note**: [v1.13 Release (to be published)](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/1.13)
+- **Release Note**: [v1.13 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/1.13)
 
 ---
 
