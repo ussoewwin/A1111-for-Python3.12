@@ -85,7 +85,7 @@ def attn_forward(self, h_):
     # attend to values
     v = v.reshape(b, c, h*w)
     w_ = w_.permute(0, 2, 1)   # b,hw,hw (first hw of k, second of q)
-    # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w_[b,i,j]
+    # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w[b,i,j]
     h_ = torch.bmm(v, w_)
     h_ = h_.reshape(b, c, h, w)
 
@@ -133,7 +133,21 @@ def xformers_attnblock_forward(self, h_):
             print("[Tiled VAE] Fallback: cross_attention_attnblock_forward")
             return cross_attention_attnblock_forward(self, h_)
 
+def _recover_cuda_after_oom():
+    try:
+        torch.cuda.synchronize()
+    except Exception:
+        pass
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def cross_attention_attnblock_forward(self, h_):
+    # Recover from any sticky CUDA error left by previous failed kernels
+    _recover_cuda_after_oom()
+
     q1 = self.q(h_)
     k1 = self.k(h_)
     v = self.v(h_)
@@ -150,7 +164,9 @@ def cross_attention_attnblock_forward(self, h_):
     k = k1.reshape(b, c, h*w) # b,c,hw
     del k1
 
-    h_ = torch.zeros_like(k, device=q.device)
+    # OOM-resilient: avoid torch.zeros_like(k) which allocates a full
+    # (b, c, hw) tensor up-front. Instead accumulate slices and cat.
+    slices = []
 
     mem_free_total = get_available_vram()
 
@@ -176,8 +192,14 @@ def cross_attention_attnblock_forward(self, h_):
         w4 = w3.permute(0, 2, 1)   # b,hw,hw (first hw of k, second of q)
         del w3
 
-        h_[:, :, i:end] = torch.bmm(v1, w4)     # b, c,hw (hw of q) h_[b,c,j] = sum_i v[b,c,i] w_[b,i,j]
+        slice_out = torch.bmm(v1, w4)     # b, c, hw_slice
         del v1, w4
+        slices.append(slice_out)
+
+    # Reconstruct full tensor; cat needs one extra allocation but the
+    # intermediate slices can be freed immediately after.
+    h_ = torch.cat(slices, dim=2)
+    del slices
 
     h2 = h_.reshape(b, c, h, w)
     del h_
@@ -186,6 +208,12 @@ def cross_attention_attnblock_forward(self, h_):
     del h2
 
     return h3
+
+# Sequence-length threshold: above this, SDP allocates the full
+# (seq_len, seq_len) attention matrix and OOMs on Tiled VAE workloads.
+# Mirrors modules.sd_hijack_optimizations.SDP_ATTNBLOCK_MAX_SEQ.
+SDP_ATTNBLOCK_MAX_SEQ = 4096
+
 
 def sdp_no_mem_attnblock_forward(self, x):
     with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=False):
@@ -203,11 +231,44 @@ def sdp_attnblock_forward(self, h_):
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
-    out = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
-    out = out.to(dtype)
-    out = rearrange(out, 'b (h w) c -> b c h w', h=h)
-    out = self.proj_out(out)
-    return out
+
+    seq_len = q.shape[1]
+    # Skip SDPA entirely for huge sequence lengths — it materializes the
+    # full attention matrix and reliably OOMs on Tiled VAE outputs.
+    if seq_len > SDP_ATTNBLOCK_MAX_SEQ:
+        out = sub_quad_attention(
+            q, k, v,
+            q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
+            kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
+            chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold,
+            use_checkpoint=False,
+        )
+        out = out.to(dtype)
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return out
+
+    try:
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, dropout_p=0.0, is_causal=False)
+        out = out.to(dtype)
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return out
+    except Exception as e:
+        print(f"[Tiled VAE] SDPA failed (seq_len={seq_len}): {e}")
+        _recover_cuda_after_oom()
+        # Drop SDP-shaped tensors and retry with sub_quad on the same q/k/v.
+        out = sub_quad_attention(
+            q, k, v,
+            q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
+            kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
+            chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold,
+            use_checkpoint=False,
+        )
+        out = out.to(dtype)
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return out
 
 def sub_quad_attnblock_forward(self, h_):
     q = self.q(h_)
@@ -224,90 +285,84 @@ def sub_quad_attnblock_forward(self, h_):
     return out
 
 def flash_attention_attnblock_forward(self, h_):
-    """Direct Flash-Attention 3/2 for AttnBlock without xformers"""
-    try:
-        q = self.q(h_)
-        k = self.k(h_)
-        v = self.v(h_)
-        b, c, h, w = q.shape
-        
-        # Flash-Attention requires (batch, seqlen, nheads, headdim) format
-        # But AttnBlock has (batch, channels, height, width)
-        # We need to reshape appropriately
-        q = rearrange(q, 'b c h w -> b (h w) c')
-        k = rearrange(k, 'b c h w -> b (h w) c')
-        v = rearrange(v, 'b c h w -> b (h w) c')
-        
-        q = q.contiguous()
-        k = k.contiguous()
-        v = v.contiguous()
-        
-        # For AttnBlock, we treat it as single-head attention (nheads=1, headdim=channels)
-        # Reshape to (batch, seqlen, 1, channels) format for flash_attn
-        q = q.reshape(q.shape[0], q.shape[1], 1, -1).contiguous()
-        k = k.reshape(k.shape[0], k.shape[1], 1, -1).contiguous()
-        v = v.reshape(v.shape[0], v.shape[1], 1, -1).contiguous()
-        
-        original_dtype = h_.dtype
-        if q.dtype not in [torch.float16, torch.bfloat16]:
-            q = q.to(torch.float16)
-            k = k.to(torch.float16)
-            v = v.to(torch.float16)
-        
-        out = flash_attn_func(q, k, v, dropout_p=0.0, causal=False)
-        
-        if out.dtype != original_dtype:
-            out = out.to(original_dtype)
-        
-        torch.cuda.empty_cache()  # CRITICAL: Clear memory after FA to prevent fragmentation
-        
-        # Reshape back to (b, seqlen, c)
-        out = out.reshape(out.shape[0], out.shape[1], -1)
-        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
-        out = self.proj_out(out)
-        return out
-        
-    except Exception as e:
-        print(f"[Tiled VAE] Flash-Attention direct failed: {e}")
-        print("[Tiled VAE] Fallback: torch.nn.functional.scaled_dot_product_attention")
+    """Direct Flash-Attention for AttnBlock without xformers.
+
+    Fallback order (SDPA is intentionally excluded — it materializes the
+    full (seq_len, seq_len) attention matrix and OOMs at the huge sequence
+    lengths Tiled VAE produces):
+
+        Flash (only if head_dim <= 256)  →  sub_quad (chunked)  →  cross_attention (chunked)
+
+    Between every fallback we clear the sticky CUDA error state and free
+    intermediate tensors so the next path starts clean.
+    """
+    q = self.q(h_)
+    k = self.k(h_)
+    v = self.v(h_)
+    b, c, h, w = q.shape
+
+    # Precompute shared rearranged tensors once for the flash + sub_quad
+    # paths; cross_attention needs different shapes so it recomputes its own.
+    q_r = rearrange(q, 'b c h w -> b (h w) c').contiguous()
+    k_r = rearrange(k, 'b c h w -> b (h w) c').contiguous()
+    v_r = rearrange(v, 'b c h w -> b (h w) c').contiguous()
+    original_dtype = q_r.dtype
+
+    # FlashAttention head_dim hard limit is 256.
+    # In single-head mode (nheads=1) head_dim equals channels.
+    # Skip flash entirely if channels exceed the limit so we don't even
+    # allocate tensors that would fail immediately and fragment memory.
+    if c <= 256 and HAS_FLASH_ATTN:
         try:
-            # Fallback to SDPA
-            q = self.q(h_)
-            k = self.k(h_)
-            v = self.v(h_)
-            b, c, h, w = q.shape
-            q, k, v = map(lambda t: rearrange(t, 'b c h w -> b (h w) c'), (q, k, v))
-            original_dtype = q.dtype
-            if shared.opts.upcast_attn:
-                q, k, v = q.float(), k.float(), v.float()
-            q = q.contiguous()
-            k = k.contiguous()
-            v = v.contiguous()
-            out = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=0.0, is_causal=False)
-            out = out.to(original_dtype)
-            torch.cuda.empty_cache()  # Clear memory after SDP to prevent fragmentation
+            q_f = q_r.reshape(b, h * w, 1, c).contiguous()
+            k_f = k_r.reshape(b, h * w, 1, c).contiguous()
+            v_f = v_r.reshape(b, h * w, 1, c).contiguous()
+
+            if q_f.dtype not in [torch.float16, torch.bfloat16]:
+                q_f = q_f.to(torch.float16)
+                k_f = k_f.to(torch.float16)
+                v_f = v_f.to(torch.float16)
+
+            out = flash_attn_func(q_f, k_f, v_f, dropout_p=0.0, causal=False)
+
+            if out.dtype != original_dtype:
+                out = out.to(original_dtype)
+
+            out = out.reshape(b, h * w, c)
             out = rearrange(out, 'b (h w) c -> b c h w', h=h)
             out = self.proj_out(out)
             return out
-        except Exception as e2:
-            print(f"[Tiled VAE] SDPA failed: {e2}")
-            print("[Tiled VAE] Fallback: sub_quad_attention")
+        except Exception as e:
+            print(f"[Tiled VAE] Flash-Attention direct failed: {e}")
             try:
-                # Final fallback to sub_quad
-                q = self.q(h_)
-                k = self.k(h_)
-                v = self.v(h_)
-                b, c, h, w = q.shape
-                q, k, v = map(lambda t: rearrange(t, 'b c h w -> b (h w) c'), (q, k, v))
-                q = q.contiguous()
-                k = k.contiguous()
-                v = v.contiguous()
-                out = sub_quad_attention(q, k, v, q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size, kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size, chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold, use_checkpoint=False)
-                torch.cuda.empty_cache()  # CRITICAL: Clear memory after sub_quad
-                out = rearrange(out, 'b (h w) c -> b c h w', h=h)
-                out = self.proj_out(out)
-                return out
-            except Exception as e3:
-                print(f"[Tiled VAE] sub_quad also failed: {e3}")
-                print("[Tiled VAE] Fallback: cross_attention_attnblock_forward")
-                return cross_attention_attnblock_forward(self, h_)
+                del q_f, k_f, v_f
+            except UnboundLocalError:
+                pass
+            _recover_cuda_after_oom()
+
+    # sub_quad fallback (chunked, memory-efficient).
+    # This is the primary safe path for huge sequence lengths.
+    try:
+        out = sub_quad_attention(
+            q_r, k_r, v_r,
+            q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
+            kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
+            chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold,
+            use_checkpoint=False,
+        )
+        out = rearrange(out, 'b (h w) c -> b c h w', h=h)
+        out = self.proj_out(out)
+        return out
+    except Exception as e3:
+        print(f"[Tiled VAE] sub_quad failed: {e3}")
+        _recover_cuda_after_oom()
+
+    # Final fallback: manually chunked cross attention.
+    # Purge shared tensors so cross_attention can allocate its own buffers
+    # in the freed memory.
+    try:
+        del q_r, k_r, v_r, q, k, v
+    except UnboundLocalError:
+        pass
+    _recover_cuda_after_oom()
+    return cross_attention_attnblock_forward(self, h_)
