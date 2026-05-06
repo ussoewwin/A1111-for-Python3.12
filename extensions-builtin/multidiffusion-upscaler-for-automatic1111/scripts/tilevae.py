@@ -378,12 +378,9 @@ class VAEHook:
             if self.to_gpu:
                 self.net = self.net.to(devices.get_optimal_device())
         
-            B, C, H, W = x.shape
-            if max(H, W) <= self.pad * 2 + self.tile_size:
-                print("[Tiled VAE]: the input size is tiny and unnecessary to tile.")
-                return self.net.original_forward(x)
-            else:
-                return self.vae_tile_forward(x)
+            # Never call original_forward here: large UI tile_size makes "tiny skip" true for
+            # full-res encoder inputs → global VAE AttnBlock + OOM (img2img encode_first_stage).
+            return self.vae_tile_forward(x)
         finally:
             self.net = self.net.to(original_device)
 

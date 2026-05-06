@@ -33,6 +33,12 @@ class MemUsageMonitor(threading.Thread):
         index = self.device.index if self.device.index is not None else torch.cuda.current_device()
         return torch.cuda.mem_get_info(index)
 
+    def cuda_mem_get_info_safe(self):
+        try:
+            return self.cuda_mem_get_info()
+        except Exception:
+            return None
+
     def run(self):
         if self.disabled:
             return
@@ -47,11 +53,14 @@ class MemUsageMonitor(threading.Thread):
                 self.run_flag.clear()
                 continue
 
-            self.data["min_free"] = self.cuda_mem_get_info()[0]
+            mi0 = self.cuda_mem_get_info_safe()
+            self.data["min_free"] = mi0[0] if mi0 is not None else 0
 
             while self.run_flag.is_set():
-                free, total = self.cuda_mem_get_info()
-                self.data["min_free"] = min(self.data["min_free"], free)
+                mi = self.cuda_mem_get_info_safe()
+                if mi is not None:
+                    free, _total = mi
+                    self.data["min_free"] = min(self.data["min_free"], free)
 
                 time.sleep(1 / self.opts.memmon_poll_rate)
 
@@ -74,16 +83,21 @@ class MemUsageMonitor(threading.Thread):
 
     def read(self):
         if not self.disabled:
-            free, total = self.cuda_mem_get_info()
-            self.data["free"] = free
-            self.data["total"] = total
+            mi = self.cuda_mem_get_info_safe()
+            if mi is not None:
+                free, total = mi
+                self.data["free"] = free
+                self.data["total"] = total
+                self.data["system_peak"] = total - self.data["min_free"]
 
-            torch_stats = torch.cuda.memory_stats(self.device)
-            self.data["active"] = torch_stats["active.all.current"]
-            self.data["active_peak"] = torch_stats["active_bytes.all.peak"]
-            self.data["reserved"] = torch_stats["reserved_bytes.all.current"]
-            self.data["reserved_peak"] = torch_stats["reserved_bytes.all.peak"]
-            self.data["system_peak"] = total - self.data["min_free"]
+            try:
+                torch_stats = torch.cuda.memory_stats(self.device)
+                self.data["active"] = torch_stats["active.all.current"]
+                self.data["active_peak"] = torch_stats["active_bytes.all.peak"]
+                self.data["reserved"] = torch_stats["reserved_bytes.all.current"]
+                self.data["reserved_peak"] = torch_stats["reserved_bytes.all.peak"]
+            except Exception:
+                pass
 
         return self.data
 

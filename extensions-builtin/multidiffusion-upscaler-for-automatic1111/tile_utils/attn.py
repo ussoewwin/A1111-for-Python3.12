@@ -124,7 +124,7 @@ def xformers_attnblock_forward(self, h_):
             q = q.contiguous()
             k = k.contiguous()
             v = v.contiguous()
-            out = sub_quad_attention(q, k, v, q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size, kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size, chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold, use_checkpoint=False)
+            out = sub_quad_attention(q, k, v, q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size, kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size, chunk_threshold=0, use_checkpoint=False)
             out = rearrange(out, 'b (h w) c -> b c h w', h=h)
             out = self.proj_out(out)
             return out
@@ -235,12 +235,12 @@ def sdp_attnblock_forward(self, h_):
     seq_len = q.shape[1]
     # Skip SDPA entirely for huge sequence lengths — it materializes the
     # full attention matrix and reliably OOMs on Tiled VAE outputs.
-    if seq_len > SDP_ATTNBLOCK_MAX_SEQ:
+    if seq_len >= SDP_ATTNBLOCK_MAX_SEQ:
         out = sub_quad_attention(
             q, k, v,
             q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
             kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
-            chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold,
+            chunk_threshold=0,
             use_checkpoint=False,
         )
         out = out.to(dtype)
@@ -262,7 +262,7 @@ def sdp_attnblock_forward(self, h_):
             q, k, v,
             q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
             kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
-            chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold,
+            chunk_threshold=0,
             use_checkpoint=False,
         )
         out = out.to(dtype)
@@ -279,7 +279,7 @@ def sub_quad_attnblock_forward(self, h_):
     q = q.contiguous()
     k = k.contiguous()
     v = v.contiguous()
-    out = sub_quad_attention(q, k, v, q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size, kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size, chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold, use_checkpoint=self.training)
+    out = sub_quad_attention(q, k, v, q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size, kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size, chunk_threshold=0, use_checkpoint=self.training)
     out = rearrange(out, 'b (h w) c -> b c h w', h=h)
     out = self.proj_out(out)
     return out
@@ -347,7 +347,7 @@ def flash_attention_attnblock_forward(self, h_):
             q_r, k_r, v_r,
             q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
             kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
-            chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold,
+            chunk_threshold=0,
             use_checkpoint=False,
         )
         out = rearrange(out, 'b (h w) c -> b c h w', h=h)

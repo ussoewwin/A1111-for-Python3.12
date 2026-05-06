@@ -362,21 +362,46 @@ except Exception as e:
     shared.xformers_available = False
 
 
+def _try_clear_cuda_sticky_errors():
+    """Surface asynchronous CUDA errors so mem queries can succeed again (OOM fallout)."""
+    if shared.device.type != 'cuda':
+        return
+    try:
+        torch.cuda.synchronize(device=shared.device)
+    except Exception:
+        pass
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def get_available_vram():
     if shared.device.type == 'cuda':
-        try:
+
+        def from_stats_and_driver():
             stats = torch.cuda.memory_stats(shared.device)
             mem_active = stats['active_bytes.all.current']
             mem_reserved = stats['reserved_bytes.all.current']
-            mem_free_cuda, _ = torch.cuda.mem_get_info(torch.cuda.current_device())
+            mem_free_cuda, _ = torch.cuda.mem_get_info(shared.device)
             mem_free_torch = mem_reserved - mem_active
-            mem_free_total = mem_free_cuda + mem_free_torch
-            return mem_free_total
+            return mem_free_cuda + mem_free_torch
+
+        try:
+            return from_stats_and_driver()
         except Exception as e:
-            # OOM 等で CUDA がエラー状態のときは保守的な小さい値を返す
-            # sub_quad_attention が小さめのチャンクで動くようにする
-            print(f"[A1111] get_available_vram failed ({e}), using conservative default")
-            return 256 * 1024 * 1024  # 256MB
+            print(f"[A1111] get_available_vram failed ({e}); clearing CUDA sticky state and retrying")
+            _try_clear_cuda_sticky_errors()
+            try:
+                return from_stats_and_driver()
+            except Exception as e2:
+                print(f"[A1111] get_available_vram retry failed ({e2}); using mem_get_info only")
+                try:
+                    mem_free_cuda, _ = torch.cuda.mem_get_info(shared.device)
+                    return mem_free_cuda
+                except Exception as e3:
+                    print(f"[A1111] get_available_vram mem_get_info failed ({e3}), using conservative default")
+                    return 256 * 1024 * 1024  # last resort — may underestimate; avoids throwing
     else:
         return psutil.virtual_memory().available
 
@@ -1094,10 +1119,19 @@ def sdp_attnblock_forward(self, x):
     k = k.contiguous()
     v = v.contiguous()
 
-    # シーケンス長が大きい場合は最初から sub_quad を使う（SDP は attention 行列で OOM になりやすい）
-    use_sub_quad_direct = seq_len > SDP_ATTNBLOCK_MAX_SEQ
+    # Large seq_len → never attempt SDP here (attention materialization cost explodes near this scale).
+    # Use ">=" so seq_len == threshold (e.g. 64*64 == 4096) does not slip into SDP/sub_quad heuristic bugs.
+    use_sub_quad_direct = seq_len >= SDP_ATTNBLOCK_MAX_SEQ
+    # chunk_threshold=0 disables sub_quad_attention's "fits VRAM → kv_chunk=k_tokens" shortcut
+    # that routes to _get_attention_scores_no_kv_chunking and OOMs on large seq_len.
+    _sub_quad_attnblock_kw = dict(
+        q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size,
+        kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size,
+        chunk_threshold=0,
+        use_checkpoint=self.training,
+    )
     if use_sub_quad_direct:
-        out = sub_quad_attention(q, k, v)
+        out = sub_quad_attention(q, k, v, **_sub_quad_attnblock_kw)
         out = out.to(dtype)
         out = rearrange(out, 'b (h w) c -> b c h w', h=h)
         out = self.proj_out(out)
@@ -1117,7 +1151,7 @@ def sdp_attnblock_forward(self, x):
                 torch.cuda.empty_cache()
             except Exception:
                 pass
-        out = sub_quad_attention(q, k, v)
+        out = sub_quad_attention(q, k, v, **_sub_quad_attnblock_kw)
         out = out.to(dtype)
         out = rearrange(out, 'b (h w) c -> b c h w', h=h)
         out = self.proj_out(out)
