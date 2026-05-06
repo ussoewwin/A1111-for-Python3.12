@@ -4,6 +4,13 @@ This document contains release notes for versions v1.01 through v1.13 of `ussoew
 
 ---
 
+## v1.14
+
+- **Summary**: Fixed img2img CUDA OOM when MultiDiffusion + Tiled VAE is enabled. Removed the "tiny input" short-circuit in `tilevae.py` that skipped tiling and caused global VAE encoder attention to OOM. Forced `chunk_threshold=0` in all `sub_quad_attention` call sites so the "fits VRAM" fast path (which routes to a non-chunked `torch.bmm` on the full `(seq_len, seq_len)` matrix) is never taken. Hardened `memmon.py` with `try/except` around `cuda_mem_get_info` and `memory_stats` so the memory monitor survives sticky CUDA errors after an OOM.
+- **Release Note**: [v1.14 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/1.14)
+
+---
+
 ## v1.13
 
 - **Summary**: Hardened Multidiffusion Tiled VAE attention fallback behavior to avoid SDPA-triggered OOM cascades, with recovery-oriented fallback sequencing and detailed technical documentation.
