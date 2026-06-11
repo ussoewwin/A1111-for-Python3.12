@@ -1,6 +1,12 @@
-# Release Notes (v1.01 to v1.13)
+# Release Notes (v1.01 to v1.15)
 
-This document contains release notes for versions v1.01 through v1.13 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v1.15 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v1.15
+
+- **Summary**: Simplified ADetailer face detection to a YOLO-only inference path. Removed the unused InsightFace hybrid detection branch (`hybrid_face_predict` and related overlap logic) that was not used at runtime; all models now call `ultralytics_predict()` directly.
 
 ---
 
