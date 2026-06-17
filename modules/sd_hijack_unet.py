@@ -143,20 +143,14 @@ CondFunc('sgm.modules.diffusionmodules.wrappers.OpenAIWrapper.forward', apply_mo
 
 def groupnorm32_forward(orig_func, self, x):
     if x.dtype == torch.bfloat16:
-        # GroupNormの計算を安全に行うため、重みをfp32に変換（VRAM消費は数KB）
-        self.float()
-        return orig_func(self, x)
-    return orig_func(self, x)
-
-def layernorm_forward(orig_func, self, x):
-    if x.dtype == torch.bfloat16:
-        self.float()
-        return orig_func(self, x.float()).type(x.dtype)
+        # SGMの元のforwardはxを強制的にfloat32にキャストするため、重みがbf16の場合にmixed dtypeエラーになります。
+        # 代わりにPyTorchのネイティブのGroupNorm.forwardを呼び出すことで、bf16のまま安全に計算させます。
+        # self.float()による破壊的な重みキャストを行わないため、VRAMフックやLoRAを破壊しません。
+        return torch.nn.GroupNorm.forward(self, x)
     return orig_func(self, x)
 
 CondFunc('sgm.modules.diffusionmodules.util.GroupNorm32.forward', groupnorm32_forward)
 CondFunc('ldm.modules.diffusionmodules.util.GroupNorm32.forward', groupnorm32_forward)
-CondFunc('torch.nn.LayerNorm.forward', layernorm_forward)
 
 
 def timestep_embedding_cast_result(orig_func, timesteps, *args, **kwargs):
