@@ -387,12 +387,6 @@ def set_model_type(model, state_dict):
     if "edm_vpred.sigma_max" in state_dict or "v_pred" in state_dict:
         model.is_vpred = True
 
-    # Forge-like automatic v-prediction detection for Illustrious models
-    if hasattr(model, 'sd_checkpoint_info') and model.sd_checkpoint_info and model.sd_checkpoint_info.filename:
-        filename_lower = model.sd_checkpoint_info.filename.lower()
-        if 'illustrious' in filename_lower:
-            model.is_vpred = True
-
     if "model.diffusion_model.x_embedder.proj.weight" in state_dict:
         model.is_sd3 = True
         model.model_type = ModelType.SD3
