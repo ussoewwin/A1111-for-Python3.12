@@ -5,7 +5,6 @@ import os
 import re
 
 import lora_patches
-import unet_diffusers_map
 import network
 import network_lora
 import network_glora
@@ -53,276 +52,6 @@ suffix_conversion = {
     }
 }
 
-# Forge v1.7.4 (sd-webui-forge-classic-neo): SDXL CLIP-L supports both nested
-# transformer.text_model.encoder.layers.* and flat transformer.encoder.layers.* (TF 5.x+).
-_SDXL_CLIP_L_EMBEDDER_PREFIX = "0_"
-_SDXL_CLIP_G_EMBEDDER_PREFIX = "1_"
-
-
-def _sdxl_clip_l_layer_suffix_from_lora_key(key_network_without_network_parts: str) -> str | None:
-    """Return layer suffix after lora_te1_/lora_te_text_model_ prefix, or None."""
-    for prefix in ("lora_te1_text_model_encoder_layers_", "lora_te_text_model_encoder_layers_"):
-        if key_network_without_network_parts.startswith(prefix):
-            return key_network_without_network_parts[len(prefix):]
-    return None
-
-
-def _sdxl_clip_l_compvis_key_candidates(layer_suffix: str) -> list[str]:
-    """CompVis module names for SDXL CLIP-L (embedder 0), nested and flat paths."""
-    nested = f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_text_model_encoder_layers_{layer_suffix}"
-    flat = f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_encoder_layers_{layer_suffix}"
-    mapping = getattr(shared.sd_model, "network_layer_mapping", None)
-    if mapping is not None and flat in mapping:
-        return [flat, nested]
-    return [nested, flat]
-
-
-def _add_sdxl_clip_transformer_aliases(network_layer_mapping: dict) -> None:
-    """Register alternate CLIP-L keys so lora_te1_* resolves for nested or flat transformers."""
-    aliases = {}
-    for network_name, module in list(network_layer_mapping.items()):
-        if "transformer_text_model_encoder_layers" in network_name:
-            alt = network_name.replace(
-                "transformer_text_model_encoder_layers",
-                "transformer_encoder_layers",
-            )
-            if alt not in network_layer_mapping:
-                aliases[alt] = module
-        elif (
-            "transformer_encoder_layers" in network_name
-            and "transformer_text_model_encoder_layers" not in network_name
-        ):
-            alt = network_name.replace(
-                "transformer_encoder_layers",
-                "transformer_text_model_encoder_layers",
-            )
-            if alt not in network_layer_mapping:
-                aliases[alt] = module
-    network_layer_mapping.update(aliases)
-
-
-def _lookup_network_module(network_layer_mapping: dict, keys: list[str]):
-    for key in keys:
-        module = network_layer_mapping.get(key)
-        if module is not None:
-            return module
-    return None
-
-
-# Forge comfy/lora.py LORA_CLIP_MAP (sd-webui-forge-classic-neo v1.7.4)
-LORA_CLIP_MAP = {
-    "mlp.fc1": "mlp_fc1",
-    "mlp.fc2": "mlp_fc2",
-    "self_attn.k_proj": "self_attn_k_proj",
-    "self_attn.q_proj": "self_attn_q_proj",
-    "self_attn.v_proj": "self_attn_v_proj",
-    "self_attn.out_proj": "self_attn_out_proj",
-}
-LORA_CLIP_SUFFIX_TO_HF = {v: k for k, v in LORA_CLIP_MAP.items()}
-
-# OpenCLIP (SDXL CLIP-G) compvis suffix -> lora_te2_* suffix
-_OPENCLIP_MLP_TO_LORA = {
-    "mlp_c_fc": "mlp_fc1",
-    "mlp_c_proj": "mlp_fc2",
-}
-_OPENCLIP_ATTN_TO_LORA = {
-    "attn_q_proj": "self_attn_q_proj",
-    "attn_k_proj": "self_attn_k_proj",
-    "attn_v_proj": "self_attn_v_proj",
-    "attn_out_proj": "self_attn_out_proj",
-}
-
-_sdxl_forge_lora_lookup: dict[str, tuple[str, torch.nn.Module]] | None = None
-
-# SDXL UNet layout (Forge detection.py / Illustrious-class SDXL)
-_SDXL_UNET_CONFIG_DEFAULT = {
-    "num_res_blocks": [2, 2, 2],
-    "channel_mult": [1, 2, 4],
-    "transformer_depth": [0, 0, 2, 2, 10, 10],
-    "transformer_depth_output": [0, 0, 0, 2, 2, 2, 10, 10, 10],
-    "transformer_depth_middle": 10,
-}
-
-
-def _normalize_sdxl_unet_config(cfg: dict) -> dict:
-    out = dict(cfg)
-    num_blocks = len(out.get("channel_mult", _SDXL_UNET_CONFIG_DEFAULT["channel_mult"]))
-    nrb = out.get("num_res_blocks", 2)
-    if isinstance(nrb, int):
-        out["num_res_blocks"] = [nrb] * num_blocks
-    else:
-        out["num_res_blocks"] = list(nrb)
-    if "transformer_depth" in out:
-        out["transformer_depth"] = list(out["transformer_depth"])
-    if "transformer_depth_output" in out:
-        out["transformer_depth_output"] = list(out["transformer_depth_output"])
-    if "transformer_depth_middle" not in out:
-        out["transformer_depth_middle"] = _SDXL_UNET_CONFIG_DEFAULT["transformer_depth_middle"]
-    return out
-
-
-def _get_sdxl_unet_config() -> dict:
-    dm = getattr(getattr(shared.sd_model, "model", None), "diffusion_model", None)
-    if dm is not None:
-        raw = getattr(dm, "config", None)
-        if isinstance(raw, dict) and "num_res_blocks" in raw:
-            return _normalize_sdxl_unet_config(raw)
-    return _normalize_sdxl_unet_config(_SDXL_UNET_CONFIG_DEFAULT)
-
-
-def _compvis_suffix_to_network_key(compvis_suffix: str) -> str:
-    return "diffusion_model_" + compvis_suffix.replace(".", "_")
-
-
-def _diffusers_param_to_lora_suffix(diffusers_key: str) -> str:
-    """Match Forge model_lora_keys_unet: strip .weight/.bias before underscore join."""
-    if diffusers_key.endswith(".weight") or diffusers_key.endswith(".bias"):
-        diffusers_key = diffusers_key[: -len(".weight")] if diffusers_key.endswith(".weight") else diffusers_key[: -len(".bias")]
-    return diffusers_key.replace(".", "_")
-
-
-def _register_diffusers_unet_aliases(
-    lookup: dict[str, tuple[str, torch.nn.Module]],
-    network_layer_mapping: dict,
-    unet_config: dict,
-) -> None:
-    """Forge model_lora_keys_unet: map Diffusers-style lora_unet_* to compvis modules."""
-    diffusers_map = unet_diffusers_map.unet_to_diffusers(unet_config)
-    for diffusers_key, compvis_suffix in diffusers_map.items():
-        compvis_key = _compvis_suffix_to_network_key(compvis_suffix)
-        module = network_layer_mapping.get(compvis_key)
-        if module is None:
-            continue
-        lora_key = _diffusers_param_to_lora_suffix(diffusers_key)
-        _register_sdxl_lora_alias(lookup, f"lora_unet_{lora_key}", compvis_key, module)
-        for prefix in ("lycoris_", "lycoris_unet_"):
-            _register_sdxl_lora_alias(lookup, f"{prefix}{lora_key}", compvis_key, module)
-        # Kohya / SimpleTuner diffusers-prefixed keys (Forge lora.py diffusers_lora_prefix loop)
-        for p in ("", "unet."):
-            diffusers_lora_key = f"{p}{diffusers_key[:-len('.weight')] if diffusers_key.endswith('.weight') else diffusers_key}"
-            diffusers_lora_key = diffusers_lora_key.replace(".to_", ".processor.to_")
-            if diffusers_lora_key.endswith(".to_out.0"):
-                diffusers_lora_key = diffusers_lora_key[:-2]
-            _register_sdxl_lora_alias(lookup, diffusers_lora_key, compvis_key, module)
-
-
-def _invalidate_sdxl_forge_lora_lookup():
-    global _sdxl_forge_lora_lookup
-    _sdxl_forge_lora_lookup = None
-
-
-def _is_openclip_attention(module) -> bool:
-    if module is None:
-        return False
-    return (
-        isinstance(getattr(module, "out_proj", None), torch.nn.Linear)
-        and isinstance(getattr(module, "in_proj_weight", None), torch.nn.Parameter)
-        and type(module).__name__ == "Attention"
-        and str(type(module).__module__).startswith("open_clip")
-    )
-
-
-def _is_fused_qkv_attention_module(module) -> bool:
-    return isinstance(module, torch.nn.MultiheadAttention) or _is_openclip_attention(module)
-
-
-def _add_openclip_attention_virtual_keys(network_layer_mapping: dict) -> None:
-    """Map lora_te2 self_attn_{q,k,v}_proj to parent OpenCLIP Attention (Forge parity)."""
-    for network_name, module in list(network_layer_mapping.items()):
-        if not _is_openclip_attention(module):
-            continue
-        for sfx in ("_q_proj", "_k_proj", "_v_proj", "_out_proj"):
-            vk = f"{network_name}{sfx}"
-            if vk not in network_layer_mapping:
-                network_layer_mapping[vk] = module
-
-
-def _register_sdxl_lora_alias(
-    lookup: dict[str, tuple[str, torch.nn.Module]],
-    lora_key: str,
-    compvis_key: str,
-    module: torch.nn.Module,
-):
-    if lora_key not in lookup:
-        lookup[lora_key] = (compvis_key, module)
-
-
-def _build_sdxl_forge_lora_lookup(network_layer_mapping: dict) -> dict[str, tuple[str, torch.nn.Module]]:
-    lookup: dict[str, tuple[str, torch.nn.Module]] = {}
-
-    for compvis_key, module in network_layer_mapping.items():
-        if compvis_key.startswith("diffusion_model_"):
-            suffix = compvis_key[len("diffusion_model_"):]
-            _register_sdxl_lora_alias(lookup, f"lora_unet_{suffix}", compvis_key, module)
-            _register_sdxl_lora_alias(lookup, compvis_key, compvis_key, module)
-
-        clip_l_prefixes = (
-            f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_text_model_encoder_layers_",
-            f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_encoder_layers_",
-        )
-        for prefix in clip_l_prefixes:
-            if not compvis_key.startswith(prefix):
-                continue
-            layer_rest = compvis_key[len(prefix):]
-            m = re.match(r"(\d+)_(.+)", layer_rest)
-            if not m:
-                continue
-            b, rest = m.group(1), m.group(2)
-            _register_sdxl_lora_alias(
-                lookup, f"lora_te1_text_model_encoder_layers_{b}_{rest}", compvis_key, module
-            )
-            _register_sdxl_lora_alias(
-                lookup, f"lora_te_text_model_encoder_layers_{b}_{rest}", compvis_key, module
-            )
-            hf = LORA_CLIP_SUFFIX_TO_HF.get(rest)
-            if hf is not None:
-                _register_sdxl_lora_alias(
-                    lookup, f"text_encoder.text_model.encoder.layers.{b}.{hf}", compvis_key, module
-                )
-                _register_sdxl_lora_alias(
-                    lookup, f"text_encoder.encoder.layers.{b}.{hf}", compvis_key, module
-                )
-
-        g_prefix = f"{_SDXL_CLIP_G_EMBEDDER_PREFIX}model_transformer_resblocks_"
-        if compvis_key.startswith(g_prefix):
-            layer_rest = compvis_key[len(g_prefix):]
-            m = re.match(r"(\d+)_(.+)", layer_rest)
-            if not m:
-                continue
-            b, rest = m.group(1), m.group(2)
-            lora_suffix = _OPENCLIP_MLP_TO_LORA.get(rest) or _OPENCLIP_ATTN_TO_LORA.get(rest)
-            if lora_suffix is None:
-                continue
-            _register_sdxl_lora_alias(
-                lookup, f"lora_te2_text_model_encoder_layers_{b}_{lora_suffix}", compvis_key, module
-            )
-            hf = LORA_CLIP_SUFFIX_TO_HF.get(lora_suffix)
-            if hf is not None:
-                _register_sdxl_lora_alias(
-                    lookup, f"text_encoder_2.text_model.encoder.layers.{b}.{hf}", compvis_key, module
-                )
-
-    _register_diffusers_unet_aliases(lookup, network_layer_mapping, _get_sdxl_unet_config())
-
-    return lookup
-
-
-def _get_sdxl_forge_lora_lookup(network_layer_mapping: dict) -> dict[str, tuple[str, torch.nn.Module]]:
-    global _sdxl_forge_lora_lookup
-    if _sdxl_forge_lora_lookup is None:
-        _sdxl_forge_lora_lookup = _build_sdxl_forge_lora_lookup(network_layer_mapping)
-    return _sdxl_forge_lora_lookup
-
-
-def _resolve_sdxl_lora_target(
-    key_network_without_network_parts: str,
-    network_layer_mapping: dict,
-) -> tuple[str | None, torch.nn.Module | None]:
-    hit = _get_sdxl_forge_lora_lookup(network_layer_mapping).get(key_network_without_network_parts)
-    if hit is None:
-        return None, None
-    return hit[0], hit[1]
-
 
 def convert_diffusers_name_to_compvis(key, is_sd2):
     def match(match_list, regex_text):
@@ -368,24 +97,6 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
     if match(m, r"lora_unet_up_blocks_(\d+)_upsamplers_0_conv"):
         return f"diffusion_model_output_blocks_{2 + m[0] * 3}_{2 if m[0]>0 else 1}_conv"
 
-    if match(m, r"text_encoder\.text_model\.encoder\.layers\.(\d+)\.(.+)"):
-        layer_suffix = f"{m[0]}_{m[1].replace('.', '_')}"
-        if shared.sd_model and getattr(shared.sd_model, "is_sdxl", False):
-            return f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_text_model_encoder_layers_{layer_suffix}"
-        return f"transformer_text_model_encoder_layers_{layer_suffix}"
-
-    if match(m, r"text_encoder\.encoder\.layers\.(\d+)\.(.+)"):
-        layer_suffix = f"{m[0]}_{m[1].replace('.', '_')}"
-        if shared.sd_model and getattr(shared.sd_model, "is_sdxl", False):
-            return f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_encoder_layers_{layer_suffix}"
-        return f"transformer_encoder_layers_{layer_suffix}"
-
-    if match(m, r"text_encoder_2\.text_model\.encoder\.layers\.(\d+)\.(.+)"):
-        layer_suffix = f"{m[0]}_{m[1].replace('.', '_')}"
-        if shared.sd_model and getattr(shared.sd_model, "is_sdxl", False):
-            return f"{_SDXL_CLIP_G_EMBEDDER_PREFIX}model_transformer_resblocks_{layer_suffix}"
-        return f"model_transformer_resblocks_{layer_suffix}"
-
     if match(m, r"lora_te_text_model_encoder_layers_(\d+)_(.+)"):
         if is_sd2:
             if 'mlp_fc1' in m[1]:
@@ -395,10 +106,7 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
             else:
                 return f"model_transformer_resblocks_{m[0]}_{m[1].replace('self_attn', 'attn')}"
 
-        layer_suffix = f"{m[0]}_{m[1]}"
-        if shared.sd_model and getattr(shared.sd_model, "is_sdxl", False):
-            return f"{_SDXL_CLIP_L_EMBEDDER_PREFIX}transformer_text_model_encoder_layers_{layer_suffix}"
-        return f"transformer_text_model_encoder_layers_{layer_suffix}"
+        return f"transformer_text_model_encoder_layers_{m[0]}_{m[1]}"
 
     if match(m, r"lora_te2_text_model_encoder_layers_(\d+)_(.+)"):
         if 'mlp_fc1' in m[1]:
@@ -423,9 +131,6 @@ def assign_network_names_to_compvis_modules(sd_model):
                 network_name = f'{i}_{name.replace(".", "_")}'
                 network_layer_mapping[network_name] = module
                 module.network_layer_name = network_name
-
-        _add_sdxl_clip_transformer_aliases(network_layer_mapping)
-        _add_openclip_attention_virtual_keys(network_layer_mapping)
     else:
         cond_stage_model = getattr(shared.sd_model.cond_stage_model, 'wrapped', shared.sd_model.cond_stage_model)
 
@@ -440,7 +145,6 @@ def assign_network_names_to_compvis_modules(sd_model):
         module.network_layer_name = network_name
 
     sd_model.network_layer_mapping = network_layer_mapping
-    _invalidate_sdxl_forge_lora_lookup()
 
 
 class BundledTIHash(str):
@@ -462,13 +166,7 @@ def load_network(name, network_on_disk):
         assign_network_names_to_compvis_modules(shared.sd_model)
 
     keys_failed_to_match = {}
-    lora_bases_total: set[str] = set()
-    lora_bases_failed: set[str] = set()
-    is_sd2 = (
-        not getattr(shared.sd_model, 'is_sdxl', False)
-        and 'model_transformer_resblocks' in shared.sd_model.network_layer_mapping
-    )
-    lora_tensors_total = 0
+    is_sd2 = 'model_transformer_resblocks' in shared.sd_model.network_layer_mapping
     if hasattr(shared.sd_model, 'diffusers_weight_map'):
         diffusers_weight_map = shared.sd_model.diffusers_weight_map
     elif hasattr(shared.sd_model, 'diffusers_weight_mapping'):
@@ -499,63 +197,31 @@ def load_network(name, network_on_disk):
             else:
                 emb_dict[vec_name] = weight
             bundle_embeddings[emb_name] = emb_dict
-            continue
-
-        lora_tensors_total += 1
-        lora_bases_total.add(key_network_without_network_parts)
 
         if diffusers_weight_map:
             key = diffusers_weight_map.get(key_network_without_network_parts, key_network_without_network_parts)
         else:
             key = convert_diffusers_name_to_compvis(key_network_without_network_parts, is_sd2)
 
-        sd_module = None
-        if getattr(shared.sd_model, "is_sdxl", False):
-            forge_key, forge_module = _resolve_sdxl_lora_target(
-                key_network_without_network_parts,
-                shared.sd_model.network_layer_mapping,
-            )
-            if forge_module is not None:
-                key = forge_key
-                sd_module = forge_module
-
-        if sd_module is None:
-            sd_module = shared.sd_model.network_layer_mapping.get(key, None)
+        sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
         if sd_module is None:
             m = re_x_proj.match(key)
             if m:
                 sd_module = shared.sd_model.network_layer_mapping.get(m.group(1), None)
 
+        # SDXL loras seem to already have correct compvis keys, so only need to replace "lora_unet" with "diffusion_model"
         if sd_module is None and "lora_unet" in key_network_without_network_parts:
-            conv_key = convert_diffusers_name_to_compvis(key_network_without_network_parts, is_sd2)
-            sd_module = shared.sd_model.network_layer_mapping.get(conv_key, None)
-            if sd_module is not None:
-                key = conv_key
+            key = key_network_without_network_parts.replace("lora_unet", "diffusion_model")
+            sd_module = shared.sd_model.network_layer_mapping.get(key, None)
         elif sd_module is None and "lora_te1_text_model" in key_network_without_network_parts:
-            layer_suffix = _sdxl_clip_l_layer_suffix_from_lora_key(key_network_without_network_parts)
-            if layer_suffix is not None:
-                sd_module = _lookup_network_module(
-                    shared.sd_model.network_layer_mapping,
-                    _sdxl_clip_l_compvis_key_candidates(layer_suffix),
-                )
-
-            if sd_module is None:
-                key = key_network_without_network_parts.replace("lora_te1_text_model", "0_transformer_text_model")
-                sd_module = shared.sd_model.network_layer_mapping.get(key, None)
+            key = key_network_without_network_parts.replace("lora_te1_text_model", "0_transformer_text_model")
+            sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
             # some SD1 Loras also have correct compvis keys
             if sd_module is None:
                 key = key_network_without_network_parts.replace("lora_te1_text_model", "transformer_text_model")
                 sd_module = shared.sd_model.network_layer_mapping.get(key, None)
-
-        elif sd_module is None and "lora_te_text_model_encoder_layers_" in key_network_without_network_parts:
-            layer_suffix = _sdxl_clip_l_layer_suffix_from_lora_key(key_network_without_network_parts)
-            if layer_suffix is not None and getattr(shared.sd_model, "is_sdxl", False):
-                sd_module = _lookup_network_module(
-                    shared.sd_model.network_layer_mapping,
-                    _sdxl_clip_l_compvis_key_candidates(layer_suffix),
-                )
 
         # kohya_ss OFT module
         elif sd_module is None and "oft_unet" in key_network_without_network_parts:
@@ -563,34 +229,19 @@ def load_network(name, network_on_disk):
             sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
         # KohakuBlueLeaf OFT module
-        if sd_module is None and "oft_diag" in key_network_without_network_parts:
-            oft_key = key_network_without_network_parts.replace("lora_unet", "diffusion_model")
-            oft_key = oft_key.replace("lora_te1_text_model", "0_transformer_text_model")
-            sd_module = shared.sd_model.network_layer_mapping.get(oft_key, None)
-            if sd_module is not None:
-                key = oft_key
+        if sd_module is None and "oft_diag" in key:
+            key = key_network_without_network_parts.replace("lora_unet", "diffusion_model")
+            key = key_network_without_network_parts.replace("lora_te1_text_model", "0_transformer_text_model")
+            sd_module = shared.sd_model.network_layer_mapping.get(key, None)
 
         if sd_module is None:
             keys_failed_to_match[key_network] = key
-            lora_bases_failed.add(key_network_without_network_parts)
             continue
 
-        storage_key = key
+        if key not in matched_networks:
+            matched_networks[key] = network.NetworkWeights(network_key=key_network, sd_key=key, w={}, sd_module=sd_module)
 
-        if storage_key not in matched_networks:
-            matched_networks[storage_key] = network.NetworkWeights(network_key=key_network, sd_key=storage_key, w={}, sd_module=sd_module)
-
-        matched_networks[storage_key].w[network_part] = weight
-
-    if len(lora_bases_total) > 0 and len(lora_bases_failed) / len(lora_bases_total) > 0.5:
-        model_flag = type(shared.sd_model.model).__name__ if hasattr(shared.sd_model, 'model') else 'default'
-        logging.warning(
-            f"[LORA] LoRA mismatch for {model_flag}: {network_on_disk.filename} "
-            f"({len(lora_bases_failed)}/{len(lora_bases_total)} keys failed to match, skipping)"
-        )
-        skipped = network.Network(name, network_on_disk)
-        skipped.mtime = net.mtime
-        return skipped
+        matched_networks[key].w[network_part] = weight
 
     for key, weights in matched_networks.items():
         net_module = None
@@ -614,11 +265,6 @@ def load_network(name, network_on_disk):
     net.bundle_embeddings = embeddings
 
     if keys_failed_to_match:
-        model_flag = type(shared.sd_model.model).__name__ if hasattr(shared.sd_model, 'model') else 'default'
-        logging.warning(
-            f"[LORA] Loading {network_on_disk.filename} for {model_flag} with "
-            f"{len(keys_failed_to_match)}/{lora_tensors_total} unmatched keys"
-        )
         logging.debug(f"Network {network_on_disk.filename} didn't match keys: {keys_failed_to_match}")
 
     return net
@@ -724,9 +370,6 @@ def allowed_layer_without_weight(layer):
     if isinstance(layer, torch.nn.LayerNorm) and not layer.elementwise_affine:
         return True
 
-    if _is_openclip_attention(layer):
-        return True
-
     return False
 
 
@@ -753,16 +396,24 @@ def network_restore_weights_from_backup(self: Union[torch.nn.Conv2d, torch.nn.Li
         return
 
     if weights_backup is not None:
-        if _is_fused_qkv_attention_module(self):
+        if isinstance(self, torch.nn.MultiheadAttention):
             restore_weights_backup(self, 'in_proj_weight', weights_backup[0])
             restore_weights_backup(self.out_proj, 'weight', weights_backup[1])
         else:
             restore_weights_backup(self, 'weight', weights_backup)
 
-    if _is_fused_qkv_attention_module(self):
+    if isinstance(self, torch.nn.MultiheadAttention):
         restore_weights_backup(self.out_proj, 'bias', bias_backup)
     else:
         restore_weights_backup(self, 'bias', bias_backup)
+
+
+def restore_all_network_weights_from_backup(module: torch.nn.Module):
+    """Restore original weights on all patched layers after checkpoint load / LoRA unload."""
+    for m in module.modules():
+        if hasattr(m, 'network_weights_backup') and m.network_weights_backup is not None:
+            network_restore_weights_from_backup(m)
+        m.network_current_names = ()
 
 
 def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn.GroupNorm, torch.nn.LayerNorm, torch.nn.MultiheadAttention]):
@@ -771,6 +422,13 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
     If weights already have this particular set of networks applied, does nothing.
     If not, restores original weights from backup and alters weights according to networks.
     """
+
+    if len(loaded_networks) == 0:
+        network_layer_name = getattr(self, 'network_layer_name', None)
+        if network_layer_name is not None:
+            network_restore_weights_from_backup(self)
+            self.network_current_names = ()
+        return
 
     network_layer_name = getattr(self, 'network_layer_name', None)
     if network_layer_name is None:
@@ -784,7 +442,7 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
         if current_names != () and not allowed_layer_without_weight(self):
             raise RuntimeError(f"{network_layer_name} - no backup weights found and current weights are not unchanged")
 
-        if _is_fused_qkv_attention_module(self):
+        if isinstance(self, torch.nn.MultiheadAttention):
             weights_backup = (store_weights_backup(self.in_proj_weight), store_weights_backup(self.out_proj.weight))
         else:
             weights_backup = store_weights_backup(self.weight)
@@ -793,7 +451,7 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
 
     bias_backup = getattr(self, "network_bias_backup", None)
     if bias_backup is None and wanted_names != ():
-        if _is_fused_qkv_attention_module(self) and self.out_proj.bias is not None:
+        if isinstance(self, torch.nn.MultiheadAttention) and self.out_proj.bias is not None:
             bias_backup = store_weights_backup(self.out_proj.bias)
         elif getattr(self, 'bias', None) is not None:
             bias_backup = store_weights_backup(self.bias)
@@ -846,30 +504,25 @@ def network_apply_weights(self: Union[torch.nn.Conv2d, torch.nn.Linear, torch.nn
             module_v = net.modules.get(network_layer_name + "_v_proj", None)
             module_out = net.modules.get(network_layer_name + "_out_proj", None)
 
-            if _is_fused_qkv_attention_module(self) and (module_q or module_k or module_v or module_out):
+            if isinstance(self, torch.nn.MultiheadAttention) and module_q and module_k and module_v and module_out:
                 try:
                     with torch.no_grad():
-                        if module_q or module_k or module_v:
-                            qw, kw, vw = self.in_proj_weight.chunk(3, 0)
-                            qkv_chunks = [qw, kw, vw]
-                            updown_chunks = []
-                            for idx, module in enumerate((module_q, module_k, module_v)):
-                                if module is None:
-                                    updown_chunks.append(torch.zeros_like(qkv_chunks[idx]))
-                                else:
-                                    updown, _ = module.calc_updown(qkv_chunks[idx])
-                                    updown_chunks.append(updown)
-                            del qw, kw, vw
-                            self.in_proj_weight += torch.vstack(updown_chunks)
+                        # Send "real" orig_weight into MHA's lora module
+                        qw, kw, vw = self.in_proj_weight.chunk(3, 0)
+                        updown_q, _ = module_q.calc_updown(qw)
+                        updown_k, _ = module_k.calc_updown(kw)
+                        updown_v, _ = module_v.calc_updown(vw)
+                        del qw, kw, vw
+                        updown_qkv = torch.vstack([updown_q, updown_k, updown_v])
+                        updown_out, ex_bias = module_out.calc_updown(self.out_proj.weight)
 
-                        if module_out is not None:
-                            updown_out, ex_bias = module_out.calc_updown(self.out_proj.weight)
-                            self.out_proj.weight += updown_out
-                            if ex_bias is not None:
-                                if self.out_proj.bias is None:
-                                    self.out_proj.bias = torch.nn.Parameter(ex_bias)
-                                else:
-                                    self.out_proj.bias += ex_bias
+                        self.in_proj_weight += updown_qkv
+                        self.out_proj.weight += updown_out
+                    if ex_bias is not None:
+                        if self.out_proj.bias is None:
+                            self.out_proj.bias = torch.nn.Parameter(ex_bias)
+                        else:
+                            self.out_proj.bias += ex_bias
 
                 except RuntimeError as e:
                     logging.debug(f"Network {net.name} layer {network_layer_name}: {e}")
@@ -932,16 +585,16 @@ def network_forward(org_module, input, original_forward):
 
 
 def network_reset_cached_weight(self: Union[torch.nn.Conv2d, torch.nn.Linear]):
+    # Do not discard weight/bias backups; only clear the applied-network cache.
     self.network_current_names = ()
-    self.network_weights_backup = None
-    self.network_bias_backup = None
 
 
 def network_Linear_forward(self, input):
     if shared.opts.lora_functional:
         return network_forward(self, input, originals.Linear_forward)
 
-    network_apply_weights(self)
+    if len(loaded_networks) > 0:
+        network_apply_weights(self)
 
     return originals.Linear_forward(self, input)
 
@@ -956,7 +609,8 @@ def network_Conv2d_forward(self, input):
     if shared.opts.lora_functional:
         return network_forward(self, input, originals.Conv2d_forward)
 
-    network_apply_weights(self)
+    if len(loaded_networks) > 0:
+        network_apply_weights(self)
 
     return originals.Conv2d_forward(self, input)
 
@@ -971,7 +625,8 @@ def network_GroupNorm_forward(self, input):
     if shared.opts.lora_functional:
         return network_forward(self, input, originals.GroupNorm_forward)
 
-    network_apply_weights(self)
+    if len(loaded_networks) > 0:
+        network_apply_weights(self)
 
     return originals.GroupNorm_forward(self, input)
 
@@ -986,7 +641,8 @@ def network_LayerNorm_forward(self, input):
     if shared.opts.lora_functional:
         return network_forward(self, input, originals.LayerNorm_forward)
 
-    network_apply_weights(self)
+    if len(loaded_networks) > 0:
+        network_apply_weights(self)
 
     return originals.LayerNorm_forward(self, input)
 
@@ -998,7 +654,8 @@ def network_LayerNorm_load_state_dict(self, *args, **kwargs):
 
 
 def network_MultiheadAttention_forward(self, *args, **kwargs):
-    network_apply_weights(self)
+    if len(loaded_networks) > 0:
+        network_apply_weights(self)
 
     return originals.MultiheadAttention_forward(self, *args, **kwargs)
 
@@ -1007,18 +664,6 @@ def network_MultiheadAttention_load_state_dict(self, *args, **kwargs):
     network_reset_cached_weight(self)
 
     return originals.MultiheadAttention_load_state_dict(self, *args, **kwargs)
-
-
-def network_OpenClipAttention_forward(self, *args, **kwargs):
-    network_apply_weights(self)
-
-    return originals.OpenClipAttention_forward(self, *args, **kwargs)
-
-
-def network_OpenClipAttention_load_state_dict(self, *args, **kwargs):
-    network_reset_cached_weight(self)
-
-    return originals.OpenClipAttention_load_state_dict(self, *args, **kwargs)
 
 
 def process_network_files(names: list[str] | None = None):

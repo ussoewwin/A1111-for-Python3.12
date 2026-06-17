@@ -14,6 +14,25 @@ from einops import rearrange
 from modules import shared, errors, devices, sub_quadratic_attention
 from modules.hypernetworks import hypernetwork
 
+
+def _should_upcast_attn(dtype):
+    """Auto-upcast attention to float32 for SDXL models in float16.
+
+    Forge/ComfyUI avoid brown-noise NaN by keeping attention math in
+    float32 when the storage dtype is float16.  A1111 had this behind a
+    manual toggle (Settings > upcast_attn, default OFF).  This helper
+    makes it automatic for SDXL/Pony/Illustrious where fp16 overflow
+    is the dominant failure mode.
+    """
+    if dtype != torch.float16:
+        return False
+    # Always upcast fp16 attention for SDXL-class models
+    sd_model = getattr(shared, 'sd_model', None)
+    if sd_model is not None and getattr(sd_model, 'is_sdxl', False):
+        return True
+    return False
+
+
 import ldm.modules.attention
 import ldm.modules.diffusionmodules.model
 
@@ -422,7 +441,7 @@ def split_cross_attention_forward_v1(self, x, context=None, mask=None, **kwargs)
     del q_in, k_in, v_in
 
     dtype = q.dtype
-    if shared.opts.upcast_attn:
+    if shared.opts.upcast_attn or _should_upcast_attn(dtype):
         q, k, v = q.float(), k.float(), v.float()
 
     with devices.without_autocast(disable=not shared.opts.upcast_attn):
@@ -459,7 +478,7 @@ def split_cross_attention_forward(self, x, context=None, mask=None, **kwargs):
     v_in = self.to_v(context_v)
 
     dtype = q_in.dtype
-    if shared.opts.upcast_attn:
+    if shared.opts.upcast_attn or _should_upcast_attn(dtype):
         q_in, k_in, v_in = q_in.float(), k_in.float(), v_in if v_in.device.type == 'mps' else v_in.float()
 
     with devices.without_autocast(disable=not shared.opts.upcast_attn):
@@ -601,7 +620,7 @@ def split_cross_attention_forward_invokeAI(self, x, context=None, mask=None, **k
     del context, context_k, context_v, x
 
     dtype = q.dtype
-    if shared.opts.upcast_attn:
+    if shared.opts.upcast_attn or _should_upcast_attn(dtype):
         q, k, v = q.float(), k.float(), v if v.device.type == 'mps' else v.float()
 
     with devices.without_autocast(disable=not shared.opts.upcast_attn):
@@ -638,7 +657,7 @@ def sub_quad_attention_forward(self, x, context=None, mask=None, **kwargs):
         q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
 
     dtype = q.dtype
-    if shared.opts.upcast_attn:
+    if shared.opts.upcast_attn or _should_upcast_attn(dtype):
         q, k = q.float(), k.float()
 
     x = sub_quad_attention(q, k, v, q_chunk_size=shared.cmd_opts.sub_quad_q_chunk_size, kv_chunk_size=shared.cmd_opts.sub_quad_kv_chunk_size, chunk_threshold=shared.cmd_opts.sub_quad_chunk_threshold, use_checkpoint=self.training)
@@ -898,7 +917,7 @@ def xformers_attention_forward(self, x, context=None, mask=None, **kwargs):
 
         # 出力dtypeは入力xに合わせる
         dtype = x.dtype
-        if shared.opts.upcast_attn:
+        if shared.opts.upcast_attn or _should_upcast_attn(q.dtype):
             q, k, v = q.float(), k.float(), v.float()
         else:
             # Forgeに寄せて、FAカーネルを使うためfloat32なら半精度で実行→出力は元dtypeへ戻す
@@ -973,7 +992,7 @@ def scaled_dot_product_attention_forward(self, x, context=None, mask=None, **kwa
     del q_in, k_in, v_in
 
     dtype = q.dtype
-    if shared.opts.upcast_attn:
+    if shared.opts.upcast_attn or _should_upcast_attn(dtype):
         q, k, v = q.float(), k.float(), v.float()
 
     # the output of sdp = (batch, num_heads, seq_len, head_dim)
@@ -1113,7 +1132,7 @@ def sdp_attnblock_forward(self, x):
     seq_len = h * w
     q, k, v = (rearrange(t, 'b c h w -> b (h w) c') for t in (q, k, v))
     dtype = q.dtype
-    if shared.opts.upcast_attn:
+    if shared.opts.upcast_attn or _should_upcast_attn(dtype):
         q, k, v = q.float(), k.float(), v.float()
     q = q.contiguous()
     k = k.contiguous()

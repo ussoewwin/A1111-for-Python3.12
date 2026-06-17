@@ -3,7 +3,7 @@ from collections import namedtuple
 
 import torch
 
-from modules import prompt_parser, devices, sd_hijack, sd_emphasis
+from modules import prompt_parser, devices, sd_hijack, sd_emphasis, sd_hijack_clip_utils as clip_utils
 from modules.shared import opts
 
 
@@ -353,14 +353,14 @@ class FrozenCLIPEmbedderWithCustomWords(FrozenCLIPEmbedderWithCustomWordsBase):
 
         if opts.CLIP_stop_at_last_layers > 1:
             z = outputs.hidden_states[-opts.CLIP_stop_at_last_layers]
-            z = self.wrapped.transformer.text_model.final_layer_norm(z)
+            z = clip_utils.clip_text_final_layer_norm(self.wrapped.transformer)(z)
         else:
             z = outputs.last_hidden_state
 
         return z
 
     def encode_embedding_init_text(self, init_text, nvpt):
-        embedding_layer = self.wrapped.transformer.text_model.embeddings
+        embedding_layer = clip_utils.clip_text_embeddings(self.wrapped.transformer)
         ids = self.wrapped.tokenizer(init_text, max_length=nvpt, return_tensors="pt", add_special_tokens=False)["input_ids"]
         embedded = embedding_layer.token_embedding.wrapped(ids.to(embedding_layer.token_embedding.wrapped.weight.device)).squeeze(0)
 

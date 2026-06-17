@@ -12,7 +12,7 @@ from omegaconf import OmegaConf, ListConfig
 from urllib import request
 import ldm.modules.midas as midas
 
-from modules import paths, shared, modelloader, devices, script_callbacks, sd_vae, sd_disable_initialization, errors, hashes, sd_models_config, sd_unet, sd_models_xl, cache, extra_networks, processing, lowvram, sd_hijack, patches
+from modules import paths, shared, modelloader, devices, script_callbacks, sd_vae, sd_disable_initialization, errors, hashes, sd_models_config, sd_unet, sd_models_xl, cache, extra_networks, processing, lowvram, sd_hijack, sd_hijack_clip_utils, patches
 from modules.timer import Timer
 from modules.shared import opts
 import tomesd
@@ -382,6 +382,10 @@ def set_model_type(model, state_dict):
     model.is_sdxl = False
     model.is_ssd = False
     model.is_sd3 = False
+    model.is_vpred = False
+
+    if "edm_vpred.sigma_max" in state_dict or "v_pred" in state_dict:
+        model.is_vpred = True
 
     if "model.diffusion_model.x_embedder.proj.weight" in state_dict:
         model.is_sd3 = True
@@ -437,6 +441,12 @@ def load_model_weights(model, checkpoint_info: CheckpointInfo, state_dict, timer
     if hasattr(model, "before_load_weights"):
         model.before_load_weights(state_dict)
 
+    if getattr(model, 'is_sd1', False):
+        cond = getattr(model, 'cond_stage_model', None)
+        if cond is not None and hasattr(cond, 'transformer'):
+            if sd_hijack_clip_utils.is_flat_clip_transformer(cond.transformer):
+                state_dict = sd_hijack_clip_utils.remap_sd1_clip_state_dict_for_flat_clip_text_model(state_dict)
+
     model.load_state_dict(state_dict, strict=False)
     timer.record("apply weights to model")
 
@@ -472,8 +482,8 @@ def load_model_weights(model, checkpoint_info: CheckpointInfo, state_dict, timer
         vae = model.first_stage_model
         depth_model = getattr(model, 'depth_model', None)
 
-        # with --no-half-vae, remove VAE from model when doing half() to prevent its weights from being converted to float16
-        if shared.cmd_opts.no_half_vae:
+        # remove VAE from model when doing half() to prevent its weights from being converted to incorrect dtype
+        if shared.cmd_opts.no_half_vae or devices.dtype_vae != torch.float16:
             model.first_stage_model = None
         # with --upcast-sampling, don't convert the depth model weights to float16
         if shared.cmd_opts.upcast_sampling and depth_model:
@@ -481,15 +491,30 @@ def load_model_weights(model, checkpoint_info: CheckpointInfo, state_dict, timer
 
         alphas_cumprod = model.alphas_cumprod
         model.alphas_cumprod = None
-        model.half()
+        
+        # Forge-compatible bfloat16 logic for SDXL
+        use_bf16 = False
+        if getattr(model, 'is_sdxl', False):
+            if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
+                use_bf16 = True
+
+        if use_bf16:
+            model.to(torch.bfloat16)
+        else:
+            model.half()
+            
         model.alphas_cumprod = alphas_cumprod
         model.alphas_cumprod_original = alphas_cumprod
         model.first_stage_model = vae
         if depth_model:
             model.depth_model = depth_model
 
-        devices.dtype_unet = torch.float16
-        timer.record("apply half()")
+        if use_bf16:
+            devices.dtype_unet = torch.bfloat16
+            timer.record("apply bfloat16()")
+        else:
+            devices.dtype_unet = torch.float16
+            timer.record("apply half()")
 
     apply_alpha_schedule_override(model)
 
@@ -668,6 +693,7 @@ def apply_alpha_schedule_override(sd_model, p=None):
 
 
 sd1_clip_weight = 'cond_stage_model.transformer.text_model.embeddings.token_embedding.weight'
+sd1_clip_weight_flat = 'cond_stage_model.transformer.embeddings.token_embedding.weight'
 sd2_clip_weight = 'cond_stage_model.model.transformer.resblocks.0.attn.in_proj_weight'
 sdxl_clip_weight = 'conditioner.embedders.1.model.ln_final.weight'
 sdxl_refiner_clip_weight = 'conditioner.embedders.0.model.ln_final.weight'
@@ -802,7 +828,7 @@ def load_model(checkpoint_info=None, already_loaded_state_dict=None):
         state_dict = get_checkpoint_state_dict(checkpoint_info, timer)
 
     checkpoint_config = sd_models_config.find_checkpoint_config(state_dict, checkpoint_info)
-    clip_is_included_into_sd = any(x for x in [sd1_clip_weight, sd2_clip_weight, sdxl_clip_weight, sdxl_refiner_clip_weight] if x in state_dict)
+    clip_is_included_into_sd = any(x for x in [sd1_clip_weight, sd1_clip_weight_flat, sd2_clip_weight, sdxl_clip_weight, sdxl_refiner_clip_weight] if x in state_dict)
 
     timer.record("find config")
 

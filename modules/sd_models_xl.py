@@ -18,7 +18,7 @@ def get_learned_conditioning(self: sgm.models.diffusion.DiffusionEngine, batch: 
     is_negative_prompt = getattr(batch, 'is_negative_prompt', False)
     aesthetic_score = shared.opts.sdxl_refiner_low_aesthetic_score if is_negative_prompt else shared.opts.sdxl_refiner_high_aesthetic_score
 
-    devices_args = dict(device=devices.device, dtype=devices.dtype)
+    devices_args = dict(device=devices.device, dtype=devices.dtype_unet)
 
     sdxl_conds = {
         "txt": batch,
@@ -96,12 +96,24 @@ def extend_sdxl(model):
     model.cond_stage_key = 'txt'
     # model.cond_stage_model will be set in sd_hijack
 
-    model.parameterization = "v" if isinstance(model.denoiser.scaling, sgm.modules.diffusionmodules.denoiser_scaling.VScaling) else "eps"
+    import sgm.modules.diffusionmodules.denoiser_scaling
+    import sgm.modules.diffusionmodules.denoiser_weighting
+
+    if getattr(model, "is_vpred", False):
+        model.denoiser.scaling = sgm.modules.diffusionmodules.denoiser_scaling.VScaling()
+        model.denoiser.weighting = sgm.modules.diffusionmodules.denoiser_weighting.VWeighting()
+        model.parameterization = "v"
+    else:
+        model.parameterization = "v" if isinstance(model.denoiser.scaling, sgm.modules.diffusionmodules.denoiser_scaling.VScaling) else "eps"
 
     discretization = sgm.modules.diffusionmodules.discretizer.LegacyDDPMDiscretization()
     model.alphas_cumprod = torch.asarray(discretization.alphas_cumprod, device=devices.device, dtype=torch.float32)
 
     model.conditioner.wrapped = torch.nn.Module()
+
+    # Forge-style: disable autocast inside decode/encode_first_stage.
+    # SGM's default torch.autocast("cuda") forces fp16 which conflicts with bf16 VAE.
+    model.disable_first_stage_autocast = True
 
 
 sgm.modules.attention.print = shared.ldm_print

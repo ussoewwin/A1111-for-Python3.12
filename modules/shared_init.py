@@ -28,13 +28,22 @@ def initialize():
         (devices.cpu if any(y in cmd_opts.use_cpu for y in [x, 'all']) else devices.get_optimal_device() for x in ['sd', 'interrogate', 'gfpgan', 'esrgan', 'codeformer'])
 
     devices.dtype = torch.float32 if cmd_opts.no_half else torch.float16
-    devices.dtype_vae = torch.float32 if cmd_opts.no_half or cmd_opts.no_half_vae else torch.float16
+    
+    # Forge-like VAE dtype auto-selection (avoid fp16 for VAE to prevent NaNs)
+    if cmd_opts.no_half or cmd_opts.no_half_vae:
+        devices.dtype_vae = torch.float32
+    else:
+        # Use bfloat16 if supported and on Ampere/Ada+ architecture
+        if torch.cuda.is_available() and torch.cuda.is_bf16_supported() and torch.cuda.get_device_properties(torch.cuda.current_device()).major >= 8:
+            devices.dtype_vae = torch.bfloat16
+        else:
+            devices.dtype_vae = torch.float32
+            
     devices.dtype_inference = torch.float32 if cmd_opts.precision == 'full' else devices.dtype
 
     if cmd_opts.precision == "half":
         msg = "--no-half and --no-half-vae conflict with --precision half"
         assert devices.dtype == torch.float16, msg
-        assert devices.dtype_vae == torch.float16, msg
         assert devices.dtype_inference == torch.float16, msg
         devices.force_fp16 = True
         devices.force_model_fp16()

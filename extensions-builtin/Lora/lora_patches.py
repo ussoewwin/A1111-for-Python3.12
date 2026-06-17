@@ -3,6 +3,11 @@ import torch
 import networks
 from modules import patches
 
+try:
+    import open_clip.transformer as open_clip_transformer
+except ImportError:
+    open_clip_transformer = None
+
 
 class LoraPatches:
     def __init__(self):
@@ -16,6 +21,16 @@ class LoraPatches:
         self.LayerNorm_load_state_dict = patches.patch(__name__, torch.nn.LayerNorm, '_load_from_state_dict', networks.network_LayerNorm_load_state_dict)
         self.MultiheadAttention_forward = patches.patch(__name__, torch.nn.MultiheadAttention, 'forward', networks.network_MultiheadAttention_forward)
         self.MultiheadAttention_load_state_dict = patches.patch(__name__, torch.nn.MultiheadAttention, '_load_from_state_dict', networks.network_MultiheadAttention_load_state_dict)
+        if open_clip_transformer is not None:
+            self.OpenClipAttention_forward = patches.patch(
+                __name__, open_clip_transformer.Attention, 'forward', networks.network_OpenClipAttention_forward
+            )
+            self.OpenClipAttention_load_state_dict = patches.patch(
+                __name__, open_clip_transformer.Attention, '_load_from_state_dict', networks.network_OpenClipAttention_load_state_dict
+            )
+        else:
+            self.OpenClipAttention_forward = None
+            self.OpenClipAttention_load_state_dict = None
 
     def undo(self):
         self.Linear_forward = patches.undo(__name__, torch.nn.Linear, 'forward')
@@ -28,4 +43,7 @@ class LoraPatches:
         self.LayerNorm_load_state_dict = patches.undo(__name__, torch.nn.LayerNorm, '_load_from_state_dict')
         self.MultiheadAttention_forward = patches.undo(__name__, torch.nn.MultiheadAttention, 'forward')
         self.MultiheadAttention_load_state_dict = patches.undo(__name__, torch.nn.MultiheadAttention, '_load_from_state_dict')
+        if open_clip_transformer is not None:
+            self.OpenClipAttention_forward = patches.undo(__name__, open_clip_transformer.Attention, 'forward')
+            self.OpenClipAttention_load_state_dict = patches.undo(__name__, open_clip_transformer.Attention, '_load_from_state_dict')
 

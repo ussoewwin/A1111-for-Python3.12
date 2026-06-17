@@ -141,6 +141,23 @@ CondFunc('ldm.models.diffusion.ddpm.LatentDiffusion.get_first_stage_encoding', l
 CondFunc('ldm.models.diffusion.ddpm.LatentDiffusion.apply_model', apply_model)
 CondFunc('sgm.modules.diffusionmodules.wrappers.OpenAIWrapper.forward', apply_model)
 
+def groupnorm32_forward(orig_func, self, x):
+    if x.dtype == torch.bfloat16:
+        # GroupNormの計算を安全に行うため、重みをfp32に変換（VRAM消費は数KB）
+        self.float()
+        return orig_func(self, x)
+    return orig_func(self, x)
+
+def layernorm_forward(orig_func, self, x):
+    if x.dtype == torch.bfloat16:
+        self.float()
+        return orig_func(self, x.float()).type(x.dtype)
+    return orig_func(self, x)
+
+CondFunc('sgm.modules.diffusionmodules.util.GroupNorm32.forward', groupnorm32_forward)
+CondFunc('ldm.modules.diffusionmodules.util.GroupNorm32.forward', groupnorm32_forward)
+CondFunc('torch.nn.LayerNorm.forward', layernorm_forward)
+
 
 def timestep_embedding_cast_result(orig_func, timesteps, *args, **kwargs):
     if devices.unet_needs_upcast and timesteps.dtype == torch.int64:

@@ -5,7 +5,7 @@ from types import MethodType
 from modules import devices, sd_hijack_optimizations, shared, script_callbacks, errors, sd_unet, patches
 from modules.hypernetworks import hypernetwork
 from modules.shared import cmd_opts
-from modules import sd_hijack_clip, sd_hijack_open_clip, sd_hijack_unet, sd_hijack_xlmr, xlmr, xlmr_m18
+from modules import sd_hijack_clip, sd_hijack_clip_utils as clip_utils, sd_hijack_open_clip, sd_hijack_unet, sd_hijack_xlmr, xlmr, xlmr_m18
 
 import ldm.modules.attention
 import ldm.modules.diffusionmodules.model
@@ -224,7 +224,7 @@ class StableDiffusionModelHijack:
                     conditioner.embedders[i] = sd_hijack_open_clip.FrozenOpenCLIPEmbedderWithCustomWords(embedder, self)
                     text_cond_models.append(conditioner.embedders[i])
                 if typename == 'FrozenCLIPEmbedder':
-                    model_embeddings = embedder.transformer.text_model.embeddings
+                    model_embeddings = clip_utils.clip_text_embeddings(embedder.transformer)
                     model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
                     conditioner.embedders[i] = sd_hijack_clip.FrozenCLIPEmbedderForSDXLWithCustomWords(embedder, self)
                     text_cond_models.append(conditioner.embedders[i])
@@ -244,7 +244,7 @@ class StableDiffusionModelHijack:
             m.cond_stage_model = sd_hijack_xlmr.FrozenXLMREmbedderWithCustomWords(m.cond_stage_model, self)
 
         elif type(m.cond_stage_model) == ldm.modules.encoders.modules.FrozenCLIPEmbedder:
-            model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
+            model_embeddings = clip_utils.clip_text_embeddings(m.cond_stage_model.transformer)
             model_embeddings.token_embedding = EmbeddingsWithFixes(model_embeddings.token_embedding, self)
             m.cond_stage_model = sd_hijack_clip.FrozenCLIPEmbedderWithCustomWords(m.cond_stage_model, self)
 
@@ -290,7 +290,8 @@ class StableDiffusionModelHijack:
                     embedder.wrapped.model.token_embedding = embedder.wrapped.model.token_embedding.wrapped
                     conditioner.embedders[i] = embedder.wrapped
                 if isinstance(embedder, sd_hijack_clip.FrozenCLIPEmbedderForSDXLWithCustomWords):
-                    embedder.wrapped.transformer.text_model.embeddings.token_embedding = embedder.wrapped.transformer.text_model.embeddings.token_embedding.wrapped
+                    embeddings = clip_utils.clip_text_embeddings(embedder.wrapped.transformer)
+                    embeddings.token_embedding = embeddings.token_embedding.wrapped
                     conditioner.embedders[i] = embedder.wrapped
 
             if hasattr(m, 'cond_stage_model'):
@@ -302,7 +303,7 @@ class StableDiffusionModelHijack:
         elif type(m.cond_stage_model) == sd_hijack_clip.FrozenCLIPEmbedderWithCustomWords:
             m.cond_stage_model = m.cond_stage_model.wrapped
 
-            model_embeddings = m.cond_stage_model.transformer.text_model.embeddings
+            model_embeddings = clip_utils.clip_text_embeddings(m.cond_stage_model.transformer)
             if type(model_embeddings.token_embedding) == EmbeddingsWithFixes:
                 model_embeddings.token_embedding = model_embeddings.token_embedding.wrapped
         elif type(m.cond_stage_model) == sd_hijack_open_clip.FrozenOpenCLIPEmbedderWithCustomWords:

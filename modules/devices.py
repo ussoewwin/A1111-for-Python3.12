@@ -216,6 +216,11 @@ def autocast(disable=False):
         # All tensor dtype conversion happens before inference.
         return contextlib.nullcontext()
 
+    # Forge-style: when UNet is in bfloat16, skip autocast entirely.
+    # bf16 has sufficient dynamic range and autocast causes dtype conflicts.
+    if dtype_unet == torch.bfloat16:
+        return contextlib.nullcontext()
+
     if fp8 and device==cpu:
         return torch.autocast("cpu", dtype=torch.bfloat16, enabled=True)
 
