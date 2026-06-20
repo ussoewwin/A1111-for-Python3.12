@@ -12,10 +12,9 @@ For years, SDXL derivative models (Pony Diffusion, WAI Illustrious, etc.) were u
 We trace-fixed the root cause: A1111's dependency on the legacy SGM (Stability Generative Models) codebase broke when `open_clip` 3.1.0 changed the `batch_first` default for `nn.MultiheadAttention`. The fix adds conditional permute handling that works with both old and new `open_clip` versions.
 
 **What works now:**
-- ✅ Pony Diffusion V6+ — base generation and LoRA
-- ✅ WAI Illustrious SDXL v1.7.0 — base generation and LoRA
-- ✅ RealVisXL V5.0
-- ✅ Any SDXL model that previously crashed with `RuntimeError: attn_mask shape` or produced noise
+- ✅ Pony 系列ベースモデル — ベース生成・LoRAともに正常
+- ✅ Illustrious 系列ベースモデル — ベース生成・LoRAともに正常
+- ✅ `RuntimeError: attn_mask shape` のクラッシュやノイズ化が発生していた全SDXLモデル
 
 **Why other UIs weren't affected:**
 - **ComfyUI** uses a completely custom CLIP implementation (no open_clip dependency)
