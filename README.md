@@ -58,7 +58,7 @@ Other Python versions are not supported. Please ensure you are using Python 3.12
 
 | Platform | Status | Notes |
 |----------|--------|-------|
-| Windows  | Fully supported | Prebuilt wheels for FA2 / SciPy / NumPy / Insightface |
+| Windows  | Fully supported | Prebuilt wheels for FA2 / SciPy / NumPy; Insightface via pip |
 | Linux    | Supported | Flash-Attention 2 is built from source (requires CUDA toolkit + `nvcc`, ~30 min) |
 | macOS    | Supported (limited) | Flash-Attention 2 is skipped (CUDA required; MPS backend cannot use FA2) |
 
@@ -122,9 +122,9 @@ Pick the section for your OS and follow the steps in order.
    pip install --pre --index-url https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/ onnxruntime-gpu
    ```
 
-8. Install Insightface (Windows prebuilt wheel):
+8. Install Insightface:
    ```cmd
-   pip install https://huggingface.co/ussoewwin/Insightface_for_windows/resolve/main/insightface-0.7.3-cp312-cp312-win_amd64.whl
+   pip install insightface
    ```
 
 9. Launch:
@@ -177,9 +177,9 @@ Pick the section for your OS and follow the steps in order.
    pip install onnxruntime-gpu
    ```
 
-8. Install Insightface (source build):
+8. Install Insightface:
    ```bash
-   pip install insightface==0.7.3
+   pip install insightface
    ```
 
 9. Launch:
@@ -226,9 +226,9 @@ Pick the section for your OS and follow the steps in order.
    pip install onnxruntime-coreml
    ```
 
-7. Install Insightface (source build):
+7. Install Insightface:
    ```bash
-   pip install insightface==0.7.3
+   pip install insightface
    ```
 
 8. Launch:

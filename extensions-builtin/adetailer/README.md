@@ -119,8 +119,6 @@ API request example: [wiki/REST-API](https://github.com/Bing-su/adetailer/wiki/R
 
 **All models are automatically downloaded on first run.** InsightFace models provide superior face detection accuracy compared to YOLO models, especially for small or angled faces.
 
-**Note**: InsightFace requires manual installation for Python 3.13 compatibility. The install script will automatically download the appropriate wheel file from [ussoewwin/Insightface_for_windows](https://huggingface.co/ussoewwin/Insightface_for_windows).
-
 **Model Sources:**
 - YOLOv8 models: [Bingsu/adetailer on Hugging Face](https://huggingface.co/Bingsu/adetailer)
 - YOLOv11n face model: [akanametov/yolo-face on GitHub](https://github.com/akanametov/yolo-face)
@@ -201,9 +199,7 @@ This release introduces a powerful hybrid detection system that significantly im
 
 #### Installation Notes
 
-- **Automatic Setup**: `install.py` automatically downloads appropriate InsightFace wheels
-- **Python 3.13**: Uses custom wheel from `huggingface.co/ussoewwin/Insightface_for_windows`
-- **Python 3.11/3.12**: Also uses custom wheels for better compatibility
+- **Automatic Setup**: `install.py` installs InsightFace from PyPI via `pip install insightface`
 - **Dependencies**: `onnxruntime>=1.16.0`, `ml_dtypes>=0.4.0`, `onnx>=1.15.0` auto-installed
 
 #### Technical Details
