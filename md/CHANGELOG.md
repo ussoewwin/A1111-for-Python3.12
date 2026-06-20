@@ -28,7 +28,6 @@ For years, SDXL derivative models (Pony Diffusion, WAI Illustrious, etc.) were u
 - **Removed**: **Obsolete CLIP-G workaround** — temporary `attn_mask` disable hack in `modules/sd_hijack_open_clip.py` (no longer needed after the `batch_first` fix).
 - **Reverted**: **Filename-based v-prediction auto-detection** — removed the hack that mis-detected Pony / IL as v-pred models; these models use eps prediction, not v-prediction.
 - **Verified**: Pony / IL base generation and LoRA on **Flash-Attention 2.9.1**, **PyTorch 2.12.1+cu132**, **open_clip 3.1.0**, **Python 3.12.10** (see environment table in technical doc).
-- **Technical Details**: See [A1111 SDXL CLIP Fix](md/A1111_SDXL_CLIP_Fix.md) for investigation timeline, ComfyUI vs Forge vs A1111 code-path comparison, changed files, and verification notes.
 
 - **Summary**: Major release — full Pony and Illustrious SDXL support (base + LoRA) via CLIP-G `batch_first` fix for open_clip 3.1.0; v-prediction filename hack reverted; documented in `md/A1111_SDXL_CLIP_Fix.md`.
 - **Release Note**: [v2.0 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.0)
