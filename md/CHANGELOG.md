@@ -6,7 +6,23 @@ This document contains release notes for versions v1.01 through v2.0 of `ussoeww
 
 ## v2.0
 
-- **Summary**: Full Pony and Illustrious (IL) SDXL support — base generation and LoRA. Fixes SDXL CLIP-G `batch_first` handling for open_clip 3.1.0 (resolves noisy output, broken LoRA effects, and CLIP-G load failures on Pony / Illustrious checkpoints). Reverts the filename-based v-prediction auto-detection hack; documents the CLIP fix in `md/A1111_SDXL_CLIP_Fix.md`.
+### MAJOR UPDATE: Pony and Illustrious (IL) SDXL — Full Support
+
+**The first A1111 fork to fully support Pony and Illustrious SDXL models on native A1111 — including LoRA.**
+
+For years, SDXL derivative models (Pony Diffusion, WAI Illustrious, etc.) were unreliable on A1111: noisy images, LoRAs that seemed to do nothing, and `RuntimeError: attn_mask shape` on load. Users often had to switch to ComfyUI or Forge. **v2.0 resolves the root cause and makes Pony / IL first-class on this fork.**
+
+- **Added**: **Full Pony series support** — base txt2img / img2img and LoRA application verified on Pony-family SDXL checkpoints.
+- **Added**: **Full Illustrious (IL) series support** — base generation and LoRA verified on WAI Illustrious and related IL checkpoints.
+- **Fixed**: **SDXL CLIP-G `batch_first` compatibility for open_clip 3.1.0** — conditional NLD/LND permute in `repositories/generative-models/sgm/modules/encoders/modules.py` so A1111 matches ComfyUI/Forge text-encoding behavior when `open_clip` sets `batch_first=True` on `nn.MultiheadAttention`. This was the actual root cause of noise, broken LoRA effects, and load-time `attn_mask` shape errors on Pony / IL (not CLIP-L layer selection, not v-prediction, not UNet dtype hacks).
+- **Fixed**: **Model load failures** — `RuntimeError` on CLIP-G load (attn_mask vs tensor shape mismatch) no longer occurs on affected checkpoints.
+- **Fixed**: **LoRA effectiveness** — style and character LoRAs on Pony / IL checkpoints apply correctly after the CLIP-G fix (previously embeddings were wrong, so LoRAs appeared ineffective).
+- **Removed**: **Obsolete CLIP-G workaround** — temporary `attn_mask` disable hack in `modules/sd_hijack_open_clip.py` (no longer needed after the `batch_first` fix).
+- **Reverted**: **Filename-based v-prediction auto-detection** — removed the hack that mis-detected Pony / IL as v-pred models; these models use eps prediction, not v-prediction.
+- **Verified**: Pony / IL base generation and LoRA on **Flash-Attention 2.9.1**, **PyTorch 2.12.1+cu132**, **open_clip 3.1.0**, **Python 3.12.10** (see environment table in technical doc).
+- **Technical Details**: See [A1111 SDXL CLIP Fix](md/A1111_SDXL_CLIP_Fix.md) for investigation timeline, ComfyUI vs Forge vs A1111 code-path comparison, changed files, and verification notes.
+
+- **Summary**: Major release — full Pony and Illustrious SDXL support (base + LoRA) via CLIP-G `batch_first` fix for open_clip 3.1.0; v-prediction filename hack reverted; documented in `md/A1111_SDXL_CLIP_Fix.md`.
 - **Release Note**: [v2.0 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.0)
 
 ---
