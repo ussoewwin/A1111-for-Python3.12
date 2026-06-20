@@ -1,6 +1,14 @@
-# Release Notes (v1.01 to v2.0)
+# Release Notes (v1.01 to v2.1)
 
-This document contains release notes for versions v1.01 through v2.0 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.1 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.1
+
+- **Fixed**: **PCM / Turbo SDXL speed LoRA key mapping** — `convert_diffusers_name_to_compvis()` in `extensions-builtin/Lora/networks.py` now maps `lora_unet_up_blocks_*_upsamplers_0_conv` to `diffusion_model_output_blocks_{N}_2_conv` (upsampler type=2) instead of the wrong `_1_conv` slot. Kohaku-ss / Diffusers-format PCM LoRAs (e.g. `pcm_sdxl_normalcfg_16step_converted.safetensors`) no longer show `3/2364 unmatched keys` and apply correctly on A1111, matching Forge and ComfyUI behavior.
+- **Summary**: PCM and Turbo-style SDXL speed LoRA support via upsampler CompVis mapping fix; technical write-up in `md/A1111_PCM_LoRA_Mapping_Fix.md`.
+- **Release Note**: [v2.1 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.1)
 
 ---
 
