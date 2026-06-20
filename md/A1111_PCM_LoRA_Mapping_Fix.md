@@ -1,28 +1,28 @@
-# A1111 における PCM / Turbo 系 SDXL 高速化 LoRA のマッピング問題 — 完全解説
+# PCM / Turbo SDXL Speed LoRA Mapping Issue in A1111 — Complete Explanation
 
-> **ベースコミット:** `1fc455d` (v2.0, 誤修正revert後)
+> **Base commit:** `1fc455d` (v2.0, after revert of incorrect fix)
 >
-> **修正コミット:** `53be7f5`
+> **Fix commit:** `53be7f5`
 
 ---
 
-## 概要
+## Overview
 
-PCM (Phased Consistency Model) や Turbo 系の SDXL 高速化 LoRA（`pcm_sdxl_normalcfg_16step_converted.safetensors` 等）を A1111 でロードすると、`3/2364 unmatched keys` の警告が出て一部のキーが正しく適用されなかった。これらの LoRA は Forge や ComfyUI では正常に動作するが、A1111 では開発終了後にリリースされたため対応していなかった。
+When loading PCM (Phased Consistency Model) or Turbo-style SDXL speed LoRAs (e.g. `pcm_sdxl_normalcfg_16step_converted.safetensors`) in A1111, a warning `3/2364 unmatched keys` appeared and some keys were not applied correctly. These LoRAs work correctly in Forge and ComfyUI, but A1111 had not been updated for them because they were released after A1111 development ended.
 
-本ドキュメントでは、問題の技術的な背景、原因、修正内容を完全かつ詳細に解説する。
+This document explains the technical background, root cause, and fix in full detail.
 
 ---
 
-## 問題の現象
+## Symptoms
 
-PCM LoRA をロードした際、コンソールに以下の警告が出力される：
+When loading a PCM LoRA, the console prints:
 
 ```
 WARNING:root:[LORA] Loading pcm_sdxl_normalcfg_16step_converted.safetensors for OpenAIWrapper with 3/2364 unmatched keys
 ```
 
-デバッグ出力で確認したところ、不一致キーは以下の 1 モジュール（3 サブキー）だった：
+Debug output showed that the mismatched keys were a single module (3 sub-keys):
 
 ```
 lora_key: lora_unet_up_blocks_0_upsamplers_0_conv.alpha
@@ -31,40 +31,40 @@ lora_key: lora_unet_up_blocks_0_upsamplers_0_conv.lora_up.weight
   -> compvis_key: diffusion_model_output_blocks_2_1_conv
 ```
 
-`up_blocks_0` の upsampler（アップサンプラー）だけが A1111 の UNet モジュールにマッピングできていなかった。
+Only the upsampler in `up_blocks_0` failed to map to an A1111 UNet module.
 
 ---
 
-## 原因：upsampler の type index 誤り
+## Root cause: wrong upsampler type index
 
-### A1111 の LoRA キーマッピングの仕組み
+### How A1111 LoRA key mapping works
 
-PCM LoRA は Kohaku-ss 形式（Diffusers 互換）のキー名を使用する：
+PCM LoRAs use Kohaku-ss format (Diffusers-compatible) key names:
 
 ```
 lora_unet_up_blocks_0_upsamplers_0_conv
 ```
 
-A1111 の UNet は CompVis 形式のモジュール名を使用するため、キー名の変換が必要。この変換は `extensions-builtin/Lora/networks.py` の `convert_diffusers_name_to_compvis()` 関数が担当する。
+A1111's UNet uses CompVis-style module names, so key names must be converted. That conversion is handled by `convert_diffusers_name_to_compvis()` in `extensions-builtin/Lora/networks.py`.
 
-### バグのあったコード
+### Buggy code
 
 ```python
-# 修正前（バグあり）
+# Before fix (buggy)
 if match(m, r"lora_unet_up_blocks_(\d+)_upsamplers_0_conv"):
     return f"diffusion_model_output_blocks_{2 + m[0] * 3}_{2 if m[0]>0 else 1}_conv"
 ```
 
-`up_blocks_0`（`m[0]=0`）の場合：
-- インデックス: `2 + 0 * 3 = 2`
-- type: `1`（`m[0] > 0` が偽のため）
-- 結果: `diffusion_model_output_blocks_2_1_conv`
+For `up_blocks_0` (`m[0]=0`):
+- Index: `2 + 0 * 3 = 2`
+- Type: `1` (because `m[0] > 0` is false)
+- Result: `diffusion_model_output_blocks_2_1_conv`
 
-### なぜ間違いなのか
+### Why this is wrong
 
-A1111 の SDXL UNet 出力ブロックの構造：
+Structure of A1111 SDXL UNet output blocks:
 
-| output_blocks インデックス | 内容 | type |
+| output_blocks index | Content | type |
 |---|---|---|
 | 0 | up_0 attention_0 (10 transformer blocks) | 1 |
 | 1 | up_0 attention_1 (10 transformer blocks) | 1 |
@@ -73,134 +73,134 @@ A1111 の SDXL UNet 出力ブロックの構造：
 | 3 | up_1 attention_0 (2 transformer blocks) | 1 |
 | ... | ... | ... |
 
-`output_blocks_2` には **2 つのモジュール** が存在する：
+`output_blocks_2` contains **two modules**:
 
-1. `output_blocks_2_1_*`: attention_2（type=1）
-2. `output_blocks_2_2_conv`: upsampler（type=2）
+1. `output_blocks_2_1_*`: attention_2 (type=1)
+2. `output_blocks_2_2_conv`: upsampler (type=2)
 
-バグのコードは upsampler に **type=1** を割り当てていたため、`output_blocks_2_1_conv` となってしまった。しかし、type=1 の position は attention 用であり、upsampler 用の `conv` 属性は存在しない。そのため `network_layer_mapping` で検索失敗 → unmatched。
+The buggy code assigned **type=1** to the upsampler, producing `output_blocks_2_1_conv`. However, type=1 positions are for attention; there is no `conv` attribute there. Lookup in `network_layer_mapping` therefore failed → unmatched.
 
-### なぜ `up_blocks_0` だけ問題なのか
+### Why only `up_blocks_0` was affected
 
-条件式 `2 if m[0]>0 else 1` は：
-- `up_blocks_1`（m[0]=1）: type=2 → `output_blocks_5_2_conv` ✅ 正しい
-- `up_blocks_0`（m[0]=0）: type=1 → `output_blocks_2_1_conv` ❌ 間違い
+The condition `2 if m[0]>0 else 1` yields:
+- `up_blocks_1` (m[0]=1): type=2 → `output_blocks_5_2_conv` ✅ correct
+- `up_blocks_0` (m[0]=0): type=1 → `output_blocks_2_1_conv` ❌ wrong
 
-SD 1.x/2.x の UNet 構造では up_blocks_0 に upsampler が type=1 の位置にあったことがあるため、この条件分岐が残っていたと考えられる。SDXL では常に type=2 が正しい。
+In SD 1.x/2.x UNet layouts, `up_blocks_0` upsamplers may have lived at type=1 positions, which likely left this branch in place. For SDXL, type=2 is always correct.
 
-### 参考：Forge / ComfyUI ではなぜ動くのか
+### Reference: why Forge / ComfyUI worked
 
-- **`unet_to_diffusers` マップ**（`unet_diffusers_map.py`）は `up_blocks.0.upsamplers.0.conv` → `output_blocks.2.2.conv` と正しくマッピングしている
-- `_register_diffusers_unet_aliases` はこのマップを使って正しいエイリアスを作成する
-- **しかし**、upsampler の `conv_shortcut` や `embed` などの特殊キーに対する `network_layer_mapping` の検索でモジュールが `None` になるケースがあり、_register_diffusers_unet_aliases でのエイリアス登録がスキップされる
-- その結果フォールバックとして `convert_diffusers_name_to_compvis` が使われ、バグのある type 判定が適用された
+- The **`unet_to_diffusers` map** (`unet_diffusers_map.py`) correctly maps `up_blocks.0.upsamplers.0.conv` → `output_blocks.2.2.conv`
+- `_register_diffusers_unet_aliases` uses that map to create correct aliases
+- **However**, for special keys such as upsampler `conv_shortcut` or `embed`, `network_layer_mapping` lookup can return `None`, so alias registration in `_register_diffusers_unet_aliases` is skipped
+- The fallback `convert_diffusers_name_to_compvis` is then used, applying the buggy type logic
 
 ---
 
-## 修正内容
+## Fix
 
-### 修正ファイル
+### File changed
 
 `extensions-builtin/Lora/networks.py`
 
-### 修正前
+### Before
 
 ```python
 if match(m, r"lora_unet_up_blocks_(\d+)_upsamplers_0_conv"):
     return f"diffusion_model_output_blocks_{2 + m[0] * 3}_{2 if m[0]>0 else 1}_conv"
 ```
 
-### 修正後
+### After
 
 ```python
 if match(m, r"lora_unet_up_blocks_(\d+)_upsamplers_0_conv"):
     return f"diffusion_model_output_blocks_{2 + m[0] * 3}_2_conv"
 ```
 
-### 修正の意味
+### What the fix does
 
-- 条件分岐 `2 if m[0]>0 else 1` を削除し、常に **type=2** を使用
-- SDXL UNet では upsampler は常に attention ブロックの後に配置され、type=2 の位置になる
-- インデックス計算 `2 + m[0] * 3` は変更なし（正しい）
+- Removes the branch `2 if m[0]>0 else 1` and always uses **type=2**
+- In SDXL UNet, upsamplers always sit after attention blocks at type=2
+- Index calculation `2 + m[0] * 3` is unchanged (already correct)
 
 ---
 
-## 修正の検証
+## Verification
 
-### 修正前
+### Before fix
 
 ```
 [LORA DEBUG] Unmatched keys for pcm_sdxl_normalcfg_16step_converted.safetensors:
   -> compvis_key: diffusion_model_output_blocks_2_1_conv  (3 keys)
 ```
 
-### 修正後
+### After fix
 
-ユーザー確認: **警告消滅**。「直った」とのこと。全 2364 キーが正常にマッピング。
+User confirmation: **warning gone**. Reported as fixed. All 2364 keys map correctly.
 
-### 影響範囲
+### Scope of impact
 
-- **修正対象**: SDXL 用 Kohaku-ss 形式 LoRA の `up_blocks_0_upsamplers_0_conv` キー
-- **後方互換性**: SD 1.x/2.x では `up_blocks_0` に upsampler キーが存在しない、または別の mapping で処理されるため影響なし
-- `up_blocks_1` 以降は元々 type=2 が正しかったため変更なし
+- **Affected:** Kohaku-ss SDXL LoRA keys `up_blocks_0_upsamplers_0_conv`
+- **Backward compatibility:** SD 1.x/2.x has no such upsampler key in `up_blocks_0`, or uses other mapping — no impact
+- `up_blocks_1` and above already used type=2 correctly — unchanged
 
 ---
 
-## 対象 LoRA
+## LoRAs involved
 
-| LoRA ファイル | キー数 | 修正要否 |
+| LoRA file | Key count | Fix needed |
 |---|---|---|
-| `pcm_sdxl_normalcfg_16step_converted.safetensors` | 2364 | ✅ 修正対象 |
-| `pcm_sdxl_smallcfg_16step_converted.safetensors` | 2364 | ✅ 修正対象（同一構造） |
-| `pcm_sd15_normalcfg_16step_converted.safetensors` | 834 | ❌ 修正不要（SD1.5） |
-| `pcm_sd15_smallcfg_16step_converted.safetensors` | 834 | ❌ 修正不要（SD1.5） |
+| `pcm_sdxl_normalcfg_16step_converted.safetensors` | 2364 | ✅ Yes |
+| `pcm_sdxl_smallcfg_16step_converted.safetensors` | 2364 | ✅ Yes (same structure) |
+| `pcm_sd15_normalcfg_16step_converted.safetensors` | 834 | ❌ No (SD1.5) |
+| `pcm_sd15_smallcfg_16step_converted.safetensors` | 834 | ❌ No (SD1.5) |
 
 ---
 
-## 環境情報
+## Environment
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
-| A1111 バージョン | v2.0 |
+| A1111 version | v2.0 |
 | Python | 3.12.10 |
 | PyTorch | 2.12.1+cu132 |
 | CUDA | 13.2 |
 | Flash-Attention | 2.9.1 |
 | open_clip | 3.1.0 |
-| リポジトリ | `ussoewwin/A1111-for-Python3.12` |
+| Repository | `ussoewwin/A1111-for-Python3.12` |
 
 ---
 
-## 修正ファイル一覧
+## Files changed
 
-| ファイル | 修正内容 |
+| File | Change |
 |---|---|
-| `extensions-builtin/Lora/networks.py` | `convert_diffusers_name_to_compvis()`: upsampler type index を常に 2 に修正 |
+| `extensions-builtin/Lora/networks.py` | `convert_diffusers_name_to_compvis()`: upsampler type index always 2 |
 
 ---
 
-## 調査経緯
+## Investigation timeline
 
-### 誤ったアプローチ（revert 済み）
+### Wrong approach (reverted)
 
-当初、SDXL UNet のブロック内モジュール順序が Diffusers 形式（attentions → resnets）と CompVis 形式（resnets → attentions）で異なると仮定し、resnet インデックスにオフセットを追加する修正を行った。この修正は逆に状況を悪化させ（3 unmatched → 54 unmatched）、即座に revert した。
+Initially we assumed SDXL UNet block module order differed between Diffusers (attentions → resnets) and CompVis (resnets → attentions), and added an offset to resnet indices. That made things worse (3 unmatched → 54 unmatched) and was reverted immediately.
 
-得られた教訓：A1111 の CompVis UNet はブロック内で resnets と attentions がペアで交互に配置され、両者は同じブロックインデックスを共有し、type (0 vs 1) で区別される。Diffusers の attentions → resnets 順序とは内部表現が根本的に異なる。
+Lesson: A1111's CompVis UNet interleaves resnets and attentions in pairs within each block; they share the same block index and are distinguished by type (0 vs 1). That internal layout is fundamentally different from Diffusers' attentions → resnets ordering.
 
-### 正しいアプローチ
+### Correct approach
 
-1. `load_network()` にデバッグログを追加し、実際の不一致キーを特定
-2. 不一致キーが `lora_unet_up_blocks_0_upsamplers_0_conv` の 3 サブキーのみであることを確認
-3. `compvis_key` が `diffusion_model_output_blocks_2_1_conv`（type=1）になっていることを発見
-4. `unet_to_diffusers` の正しいマッピング（type=2）と比較し、`convert_diffusers_name_to_compvis` の type 判定がバグっていることを特定
-5. 条件分岐を削除し常に type=2 に修正
+1. Add debug logging in `load_network()` to identify actual unmatched keys
+2. Confirm only the 3 sub-keys of `lora_unet_up_blocks_0_upsamplers_0_conv` were unmatched
+3. Find `compvis_key` was `diffusion_model_output_blocks_2_1_conv` (type=1)
+4. Compare with correct mapping in `unet_to_diffusers` (type=2) and pinpoint the bug in `convert_diffusers_name_to_compvis` type logic
+5. Remove the branch and always use type=2
 
 ---
 
-## まとめ
+## Summary
 
-今回の問題の本質は、`convert_diffusers_name_to_compvis()` の upsampler マッピングにおける **type index の条件分岐バグ** だった。
+The core issue was a **type index branch bug** in upsampler mapping inside `convert_diffusers_name_to_compvis()`.
 
-SDXL UNet では upsampler は常に type=2 の位置にあるが、コードにはレガシーな条件分岐 `2 if m[0]>0 else 1` が残っており、`up_blocks_0` の場合だけ誤って type=1（attention 位置）にマッピングされていた。
+In SDXL UNet, upsamplers always sit at type=2, but legacy code `2 if m[0]>0 else 1` remained, so only `up_blocks_0` was wrongly mapped to type=1 (attention slot).
 
-修正は 1 行の条件分岐削除のみ。影響範囲は極めて限定的で、後方互換性を完全に保つ。
+The fix is removing one conditional branch. Impact is very narrow and fully backward compatible.
