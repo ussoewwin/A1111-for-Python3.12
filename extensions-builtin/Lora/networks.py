@@ -366,7 +366,7 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
         return f"diffusion_model_input_blocks_{3 + m[0] * 3}_0_op"
 
     if match(m, r"lora_unet_up_blocks_(\d+)_upsamplers_0_conv"):
-        return f"diffusion_model_output_blocks_{2 + m[0] * 3}_{2 if m[0]>0 else 1}_conv"
+        return f"diffusion_model_output_blocks_{2 + m[0] * 3}_2_conv"
 
     if match(m, r"text_encoder\.text_model\.encoder\.layers\.(\d+)\.(.+)"):
         layer_suffix = f"{m[0]}_{m[1].replace('.', '_')}"
