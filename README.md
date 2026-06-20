@@ -16,13 +16,6 @@ We trace-fixed the root cause: A1111's dependency on the legacy SGM (Stability G
 - ✅ Illustrious series — base generation + LoRA
 - ✅ Any SDXL model that previously crashed with `RuntimeError: attn_mask shape` or produced noise
 
-**Why other UIs weren't affected:**
-- **ComfyUI** uses a completely custom CLIP implementation (no open_clip dependency)
-- **Forge Nunchaku** borrows model weights from open_clip but runs inference through HuggingFace Transformers
-- **A1111 (legacy)** alone ran the full open_clip → SGM → `nn.MultiheadAttention` pipeline, getting hit by the API change
-
-See [`md/A1111_SDXL_CLIP_Fix.md`](md/A1111_SDXL_CLIP_Fix.md) for the complete technical deep-dive.
-
 ### Built-in Extensions
 
 The following popular extensions are built-in and ready to use out of the box:
