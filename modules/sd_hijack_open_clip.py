@@ -54,28 +54,14 @@ class FrozenOpenCLIPEmbedder2WithCustomWords(sd_hijack_clip.FrozenCLIPEmbedderWi
         return tokenized
 
     def encode_with_transformers(self, tokens):
-        # Fix for PyTorch 2.8+ attn_mask shape issue
-        original_attn_mask = None
-        if hasattr(self.wrapped.model, 'attn_mask') and self.wrapped.model.attn_mask is not None:
-            # Store original mask
-            original_attn_mask = self.wrapped.model.attn_mask
-            # Fix shape if it's [77, 77] - convert to broadcastable shape
-            if original_attn_mask.shape == (77, 77):
-                self.wrapped.model.attn_mask = None  # Temporarily disable mask
-        
-        try:
-            d = self.wrapped.encode_with_transformer(tokens)
-            z = d[self.wrapped.layer]
+        d = self.wrapped.encode_with_transformer(tokens)
+        z = d[self.wrapped.layer]
 
-            pooled = d.get("pooled")
-            if pooled is not None:
-                z.pooled = pooled
+        pooled = d.get("pooled")
+        if pooled is not None:
+            z.pooled = pooled
 
-            return z
-        finally:
-            # Restore original mask
-            if original_attn_mask is not None:
-                self.wrapped.model.attn_mask = original_attn_mask
+        return z
 
     def encode_embedding_init_text(self, init_text, nvpt):
         ids = tokenizer.encode(init_text)
