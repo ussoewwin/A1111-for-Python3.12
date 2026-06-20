@@ -1,6 +1,13 @@
-# Release Notes (v1.01 to v1.15)
+# Release Notes (v1.01 to v2.0)
 
-This document contains release notes for versions v1.01 through v1.15 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.0 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.0
+
+- **Summary**: Full Pony and Illustrious (IL) SDXL support — base generation and LoRA. Fixes SDXL CLIP-G `batch_first` handling for open_clip 3.1.0 (resolves noisy output, broken LoRA effects, and CLIP-G load failures on Pony / Illustrious checkpoints). Reverts the filename-based v-prediction auto-detection hack; documents the CLIP fix in `md/A1111_SDXL_CLIP_Fix.md`.
+- **Release Note**: [v2.0 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.0)
 
 ---
 
