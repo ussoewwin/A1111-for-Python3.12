@@ -7,7 +7,7 @@ A web interface for Stable Diffusion, implemented using the Gradio library.
 
 For detailed technical explanation, see [v2.0 Release Notes](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.0)
 
-### SDXL Pony/Illustrious Compatibility Fix (v1.15+)
+### SDXL Pony/Illustrious Compatibility Fix (v2.0+)
 
 **The first A1111 fork to fully support Pony and Illustrious SDXL models — including LoRA.**
 
