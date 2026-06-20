@@ -324,6 +324,17 @@ def _resolve_sdxl_lora_target(
     return hit[0], hit[1]
 
 
+
+# SDXL UNet: attentions appear before resnets within each block
+# Standard SDXL layout: down_0=0 attn, down_1=2 attn, down_2=2 attn, mid=1 attn
+#                      up_0=3 attn, up_1=3 attn, up_2=0 attn
+_SDXL_DOWN_RESNET_ATTN_COUNT = {0: 0, 1: 2, 2: 2}
+_SDXL_UP_RESNET_ATTN_COUNT   = {0: 3, 1: 3, 2: 0}
+_SDXL_MID_RESNET_ATTN_COUNT  = 1
+
+def _is_sdxl_model():
+    return shared.sd_model is not None and getattr(shared.sd_model, "is_sdxl", False)
+
 def convert_diffusers_name_to_compvis(key, is_sd2):
     def match(match_list, regex_text):
         regex = re_compiled.get(regex_text)
@@ -352,15 +363,29 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
 
     if match(m, r"lora_unet_down_blocks_(\d+)_(attentions|resnets)_(\d+)_(.+)"):
         suffix = suffix_conversion.get(m[1], {}).get(m[3], m[3])
-        return f"diffusion_model_input_blocks_{1 + m[0] * 3 + m[2]}_{1 if m[1] == 'attentions' else 0}_{suffix}"
+        idx = 1 + m[0] * 3 + m[2]
+        if _is_sdxl_model() and m[1] == 'resnets':
+            idx += _SDXL_DOWN_RESNET_ATTN_COUNT.get(m[0], 0)
+        return f"diffusion_model_input_blocks_{idx}_{1 if m[1] == 'attentions' else 0}_{suffix}"
 
     if match(m, r"lora_unet_mid_block_(attentions|resnets)_(\d+)_(.+)"):
         suffix = suffix_conversion.get(m[0], {}).get(m[2], m[2])
-        return f"diffusion_model_middle_block_{1 if m[0] == 'attentions' else m[1] * 2}_{suffix}"
+        if m[0] == 'attentions':
+            return f"diffusion_model_middle_block_1_{suffix}"
+        else:
+            # resnets: index = 1 (attention) + m[1] * 2 for SD1.x/SD2.x
+            # For SDXL: first resnet starts at index 2 (after 1 attention)
+            idx = m[1] * 2
+            if _is_sdxl_model():
+                idx += _SDXL_MID_RESNET_ATTN_COUNT
+            return f"diffusion_model_middle_block_{idx}_{suffix}"
 
     if match(m, r"lora_unet_up_blocks_(\d+)_(attentions|resnets)_(\d+)_(.+)"):
         suffix = suffix_conversion.get(m[1], {}).get(m[3], m[3])
-        return f"diffusion_model_output_blocks_{m[0] * 3 + m[2]}_{1 if m[1] == 'attentions' else 0}_{suffix}"
+        idx = m[0] * 3 + m[2]
+        if _is_sdxl_model() and m[1] == 'resnets':
+            idx += _SDXL_UP_RESNET_ATTN_COUNT.get(m[0], 0)
+        return f"diffusion_model_output_blocks_{idx}_{1 if m[1] == 'attentions' else 0}_{suffix}"
 
     if match(m, r"lora_unet_down_blocks_(\d+)_downsamplers_0_conv"):
         return f"diffusion_model_input_blocks_{3 + m[0] * 3}_0_op"
