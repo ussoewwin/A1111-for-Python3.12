@@ -48,3 +48,4 @@ trace.json
 /create_numpy_whl.py
 /create_scipy_whl.py
 /test_scipy.whl
+/test_scipy2.whl
