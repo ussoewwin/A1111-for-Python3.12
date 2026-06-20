@@ -13,8 +13,6 @@ For detailed technical explanation, see [v2.0 Release Notes](https://github.com/
 
 For years, SDXL derivative models (Pony Diffusion, WAI Illustrious, etc.) were unreliable on A1111. Enthusiasts had to switch to ComfyUI or Forge to use these models properly.
 
-We trace-fixed the root cause: A1111's dependency on the legacy SGM (Stability Generative Models) codebase broke when `open_clip` 3.1.0 changed the `batch_first` default for `nn.MultiheadAttention`. The fix adds conditional permute handling that works with both old and new `open_clip` versions.
-
 **What works now:**
 - ✅ Pony series — base generation + LoRA
 - ✅ Illustrious series — base generation + LoRA
