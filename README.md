@@ -3,9 +3,18 @@
 A web interface for Stable Diffusion, implemented using the Gradio library.
 ## Key Features & Improvements
 
-### MAJOR UPDATE: v2.0 — Pony and Illustrious (IL) SDXL
+### SDXL Pony/Illustrious Compatibility Fix (v1.15+)
 
-Native A1111 could not support Pony and Illustrious (IL) SDXL — including LoRA. **This fork fully supports them.**
+**The first A1111 fork to fully support Pony and Illustrious SDXL models — including LoRA.**
+
+For years, SDXL derivative models (Pony Diffusion, WAI Illustrious, etc.) were unreliable on A1111. Enthusiasts had to switch to ComfyUI or Forge to use these models properly.
+
+We trace-fixed the root cause: A1111's dependency on the legacy SGM (Stability Generative Models) codebase broke when `open_clip` 3.1.0 changed the `batch_first` default for `nn.MultiheadAttention`. The fix adds conditional permute handling that works with both old and new `open_clip` versions.
+
+**What works now:**
+- ✅ Pony series — base generation + LoRA
+- ✅ Illustrious series — base generation + LoRA
+- ✅ Any SDXL model that previously crashed with `RuntimeError: attn_mask shape` or produced noise
 
 ### Built-in Extensions
 
