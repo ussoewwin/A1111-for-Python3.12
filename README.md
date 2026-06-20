@@ -1,6 +1,56 @@
 # Stable Diffusion web UI
 
 A web interface for Stable Diffusion, implemented using the Gradio library.
+## Key Features & Improvements
+
+### SDXL Pony/Illustrious Compatibility Fix (v1.15+)
+
+**The first A1111 fork to fully support Pony and Illustrious SDXL models — including LoRA.**
+
+For years, SDXL derivative models (Pony Diffusion, WAI Illustrious, etc.) were unreliable on A1111. Enthusiasts had to switch to ComfyUI or Forge to use these models properly.
+
+We trace-fixed the root cause: A1111's dependency on the legacy SGM (Stability Generative Models) codebase broke when `open_clip` 3.1.0 changed the `batch_first` default for `nn.MultiheadAttention`. The fix adds conditional permute handling that works with both old and new `open_clip` versions.
+
+**What works now:**
+- ✅ Pony Diffusion V6+ — base generation and LoRA
+- ✅ WAI Illustrious SDXL v1.7.0 — base generation and LoRA
+- ✅ RealVisXL V5.0
+- ✅ Any SDXL model that previously crashed with `RuntimeError: attn_mask shape` or produced noise
+
+**Why other UIs weren't affected:**
+- **ComfyUI** uses a completely custom CLIP implementation (no open_clip dependency)
+- **Forge Nunchaku** borrows model weights from open_clip but runs inference through HuggingFace Transformers
+- **A1111 (legacy)** alone ran the full open_clip → SGM → `nn.MultiheadAttention` pipeline, getting hit by the API change
+
+See [`md/A1111_SDXL_CLIP_Fix.md`](md/A1111_SDXL_CLIP_Fix.md) for the complete technical deep-dive.
+
+### Built-in Extensions
+
+The following popular extensions are built-in and ready to use out of the box:
+- **ControlNet** (v1.1.455) — integrated at startup with automatic path migration
+- **ADetailer** (v1.01.0) — face and person detailer with 7 models
+- **FreeU** — effortless detail enhancement
+- **WD14 Tagger** — automatic prompt generation from images
+- **ReActor** (v0.7.1-b3) — face swap
+- **Dynamic Thresholding** (CFG Scale fix)
+- **Aspect Ratio** presets (built-in, no extension needed)
+- **MultiDiffusion + Tiled VAE** — high-resolution upscaling
+
+### Python 3.12 Native
+
+Fully ported to Python 3.12. No `pkg_resources` hacks, no legacy compatibility layers. All dependency conflicts (NumPy, SciPy, `clip.py`) are handled automatically at startup.
+
+### Flash-Attention 2 with Graceful Fallback
+
+Direct Flash-Attention 2 support with staged fallback:
+```
+1. FA-2 (Flash-Attention 2.9.1) — maximum speed
+2. SDP (PyTorch scaled_dot_product_attention) — no extra deps
+3. sub_quad (built-in) — universal fallback
+```
+
+Prebuilt Windows wheels included. Linux builds from source automatically. macOS skips FA2 (MPS limitation).
+
 
 ## Python Version Support
 
