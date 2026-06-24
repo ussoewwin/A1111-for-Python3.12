@@ -797,6 +797,11 @@ class UnetHook(nn.Module):
             hs = []
             with th.no_grad():
                 t_emb = cond_cast_unet(timestep_embedding(timesteps, self.model_channels, repeat_only=False))
+                # timestep_embedding (util) always returns float32; cond_cast_unet is a no-op when
+                # unet_needs_upcast is false. With bf16/fp16 UNet and no autocast, time_embed Linear
+                # weights must match input dtype (LoRA network_Linear_forward does not cast input).
+                if t_emb.dtype != devices.dtype_unet:
+                    t_emb = t_emb.to(devices.dtype_unet)
                 emb = self.time_embed(t_emb)
 
                 if is_sdxl:

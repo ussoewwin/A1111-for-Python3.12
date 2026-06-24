@@ -17,6 +17,13 @@ from scripts.controlnet_lora import controlnet_lora_hijack, force_load_state_dic
 from scripts.enums import ControlModelType
 
 
+def _sync_control_model_dtype(network, config):
+    """Keep control_model.dtype aligned with loaded weight dtype (fp16/bf16/fp32)."""
+    control_model = getattr(network, 'control_model', None)
+    if control_model is not None and hasattr(control_model, 'dtype'):
+        control_model.dtype = devices.dtype_unet if config.get('use_fp16', False) else torch.float32
+
+
 controlnet_default_config = {'adm_in_channels': None,
                              'in_channels': 4,
                              'model_channels': 320,
@@ -126,12 +133,13 @@ def build_model_by_guess(state_dict, unet, model_path: str) -> ControlModel:
         config = copy.deepcopy(controlnet_sdxl_config if is_sdxl else controlnet_default_config)
         config['global_average_pooling'] = False
         config['hint_channels'] = int(state_dict['input_hint_block.0.weight'].shape[1])
-        config['use_fp16'] = devices.dtype_unet == torch.float16
+        config['use_fp16'] = devices.dtype_unet != torch.float32
         with controlnet_lora_hijack():
             network = PlugableControlModel(config, state_dict=None)
         force_load_state_dict(network.control_model, state_dict)
         network.is_control_lora = True
         network.to(devices.dtype_unet)
+        _sync_control_model_dtype(network, config)
         return ControlModel(network, ControlModelType.ControlLoRA)
 
     if "down_blocks.0.motion_modules.0.temporal_transformer.norm.weight" in state_dict: # sparsectrl
@@ -143,10 +151,11 @@ def build_model_by_guess(state_dict, unet, model_path: str) -> ControlModel:
             config['use_simplified_condition_embedding'] = False
             config['conditioning_channels'] = 4
 
-        config['use_fp16'] = devices.dtype_unet == torch.float16
+        config['use_fp16'] = devices.dtype_unet != torch.float32
 
         network = PlugableSparseCtrlModel(config, state_dict)
         network.to(devices.dtype_unet)
+        _sync_control_model_dtype(network, config)
         return ControlModel(network, ControlModelType.SparseCtrl)
 
     if "controlnet_cond_embedding.conv_in.weight" in state_dict:  # diffusers
@@ -235,10 +244,11 @@ def build_model_by_guess(state_dict, unet, model_path: str) -> ControlModel:
         else:
             control_model_type = ControlModelType.ControlNet
 
-        config['use_fp16'] = devices.dtype_unet == torch.float16
+        config['use_fp16'] = devices.dtype_unet != torch.float32
 
         network = PlugableControlModel(config, state_dict)
         network.to(devices.dtype_unet)
+        _sync_control_model_dtype(network, config)
 
         return ControlModel(network, control_model_type)
 
