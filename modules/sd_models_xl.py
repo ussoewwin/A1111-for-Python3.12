@@ -5,7 +5,7 @@ import torch
 import sgm.models.diffusion
 import sgm.modules.diffusionmodules.denoiser_scaling
 import sgm.modules.diffusionmodules.discretizer
-from modules import devices, shared, prompt_parser
+from modules import devices, forge_tiled_vae, shared, prompt_parser
 from modules import torch_utils
 
 
@@ -50,6 +50,8 @@ def get_first_stage_encoding(self, x):  # SDXL's encode_first_stage does everyth
 sgm.models.diffusion.DiffusionEngine.get_learned_conditioning = get_learned_conditioning
 sgm.models.diffusion.DiffusionEngine.apply_model = apply_model
 sgm.models.diffusion.DiffusionEngine.get_first_stage_encoding = get_first_stage_encoding
+
+forge_tiled_vae.apply_diffusion_engine_vae_patch()
 
 
 def encode_embedding_init_text(self: sgm.modules.GeneralConditioner, init_text, nvpt):

@@ -711,6 +711,12 @@ class Script(scripts.Script):
 
         # undo hijack if disabled (in cases last time crashed)
         if not enabled:
+            try:
+                from modules import forge_tiled_vae
+                if forge_tiled_vae.is_patch_applied():
+                    forge_tiled_vae.set_vae_always_tiled(False)
+            except Exception:
+                pass
             if self.hooked:
                 if isinstance(encoder.forward, VAEHook):
                     encoder.forward.net = None
@@ -723,6 +729,23 @@ class Script(scripts.Script):
 
         if devices.get_optimal_device_name().startswith('cuda') and vae.device == devices.cpu and not vae_to_gpu:
             print("[Tiled VAE] warn: VAE is not on GPU, check 'Move VAE to GPU' if possible.")
+
+        try:
+            from modules import forge_tiled_vae
+            if forge_tiled_vae.is_patch_applied():
+                forge_tiled_vae.set_vae_always_tiled(enabled)
+                print(
+                    "[Forge VAE] SDXL Forge encode/decode patch active — skipping multidiffusion VAEHook "
+                    "(no 3072px / 1x1 mega-tile)."
+                )
+                if enabled:
+                    print(
+                        "[Forge VAE] VAE_ALWAYS_TILED ON (Enable Tiled VAE): "
+                        "512px encode / 64px decode, 3-pass (Forge parity)."
+                    )
+                return
+        except Exception:
+            pass
 
         # do hijack
         kwargs = {
