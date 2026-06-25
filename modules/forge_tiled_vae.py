@@ -236,15 +236,24 @@ def tiled_scale_multidim(
                 break
             s_in = s
             upscaled = []
+            last_axis = []
 
             for d in range(dims):
                 pos = max(0, min(s.shape[d + 2] - overlap[d], it[d]))
                 length = min(tile[d], s.shape[d + 2] - pos)
                 s_in = s_in.narrow(d + 2, pos, length)
                 upscaled.append(round(get_pos(d, pos)))
+                last_axis.append(pos + length >= s.shape[d + 2])
 
             ps = function(s_in).to(output_device)
             mask = torch.ones_like(ps)
+
+            # End-align the last tile when VAE floor() leaves the output edge
+            # uncovered (e.g. pixel width 2325 -> latent 291: last tile fills
+            # 286-289 only, index 290 stays out_div==0 -> 0/0 = NaN).
+            for d in range(dims):
+                if last_axis[d] and upscaled[d] + mask.shape[d + 2] < out.shape[d + 2]:
+                    upscaled[d] = max(0, out.shape[d + 2] - mask.shape[d + 2])
 
             for d in range(2, dims + 2):
                 feather = round(get_scale(d - 2, overlap[d - 2]))
@@ -449,7 +458,7 @@ def _forge_3pass_tiled(
 ) -> torch.Tensor:
     """Forge encode_tiled_ / decode_tiled_ 3-pass average — no in-place += on tiled tensors."""
     acc = None
-    for (tile_y, tile_x), overlap in passes:
+    for idx, ((tile_y, tile_x), overlap) in enumerate(passes):
         part = tiled_scale(
             samples,
             fn,
@@ -462,6 +471,11 @@ def _forge_3pass_tiled(
             downscale=downscale,
             pbar=pbar,
         )
+        nan_count = int(torch.isnan(part).sum().item())
+        inf_count = int(torch.isinf(part).sum().item())
+        absmax = float(part.abs().max().item()) if nan_count == 0 else float('nan')
+        print(f'[MD-DIAG] 3pass[{idx}] tile=({tile_y},{tile_x}) ov={overlap} '
+              f'part shape={tuple(part.shape)} nan={nan_count} inf={inf_count} absmax={absmax:.4g}')
         acc = part if acc is None else acc + part
     return acc / 3.0
 

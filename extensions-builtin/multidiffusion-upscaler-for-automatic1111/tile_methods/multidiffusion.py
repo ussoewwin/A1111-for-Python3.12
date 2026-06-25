@@ -161,12 +161,9 @@ class MultiDiffusion(AbstractDiffusion):
 
         N, C, H, W = x_in.shape
         if (H, W) != (self.h, self.w):
-            # Noise Inversion uses init_latent at input resolution while self.h/w are upscale target.
-            # Crop ControlNet hint to current latent size to avoid full-resolution UNet forward OOM.
-            self.set_controlnet_tensors_for_size(H, W)
-            out = org_func(x_in)
-            self.reset_controlnet_tensors()
-            return out
+            self._rebuild_latent_canvas(H, W)
+            if self.enable_controlnet:
+                self.set_controlnet_tensors_for_size(H, W)
 
         # clear buffer canvas
         self.reset_buffer(x_in)
@@ -260,6 +257,14 @@ class MultiDiffusion(AbstractDiffusion):
             x_feather_mask   = torch.where(x_feather_count > 1, x_feather_mask   / x_feather_count, x_feather_mask)
             # Weighted average with original x_buffer
             x_out = torch.where(x_feather_count > 0, x_out * (1 - x_feather_mask) + x_feather_buffer * x_feather_mask, x_out)
+
+        if torch.isnan(x_out).any() or torch.isinf(x_out).any():
+            nan_buf = torch.isnan(self.x_buffer).any().item()
+            inf_buf = torch.isinf(self.x_buffer).any().item()
+            w_min = float(self.weights.min().item())
+            w_zero = int((self.weights == 0).sum().item())
+            print(f'[MD-NaN] step={state.sampling_step} shape={tuple(x_out.shape)} '
+                  f'buf_nan={nan_buf} buf_inf={inf_buf} w_min={w_min} w_zero={w_zero}')
 
         return x_out
 

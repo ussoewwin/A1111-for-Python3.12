@@ -15,6 +15,16 @@ from modules.processing import opt_f
 
 from tile_utils.typing import *
 
+
+def pixel_to_latent_h(px: int) -> int:
+    """VAE latent height for SD1.x (e.g. 1945px -> 243, not 244)."""
+    return int(px) // opt_f
+
+
+def pixel_to_latent_w(px: int) -> int:
+    """VAE latent width when pixels are not a multiple of 8 (e.g. 2325px -> 291)."""
+    return (int(px) + opt_f - 1) // opt_f
+
 state: State
 
 

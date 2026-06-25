@@ -22,8 +22,8 @@ class AbstractDiffusion:
         # cache. final result of current sampling step, [B, C=4, H//8, W//8]
         # avoiding overhead of creating new tensors and weight summing
         self.x_buffer: Tensor = None
-        self.w: int = int(self.p.width  // opt_f)       # latent size
-        self.h: int = int(self.p.height // opt_f)
+        self.w: int = pixel_to_latent_w(self.p.width)
+        self.h: int = pixel_to_latent_h(self.p.height)
         # weights for background & grid bboxes
         self.weights: Tensor = torch.zeros((1, 1, self.h, self.w), device=devices.device, dtype=torch.float32)
 
@@ -40,6 +40,10 @@ class AbstractDiffusion:
         self.num_tiles: int = None
         self.num_batches: int = None
         self.batched_bboxes: List[List[BBox]] = []
+        self._grid_tile_w_cfg: int = None
+        self._grid_tile_h_cfg: int = None
+        self._grid_overlap: int = 0
+        self._grid_tile_bs_cfg: int = 1
 
         # ext. Region Prompt Control (custom bbox)
         self.enable_custom_bbox: bool = False
@@ -169,9 +173,48 @@ class AbstractDiffusion:
 
     ''' ↓↓↓ extensive functionality ↓↓↓ '''
 
+    def _rebuild_latent_canvas(self, h: int, w: int) -> bool:
+        if self.h == h and self.w == w:
+            return False
+        old_h, old_w = self.h, self.w
+        self.h, self.w = h, w
+        self.weights = torch.zeros((1, 1, self.h, self.w), device=devices.device, dtype=torch.float32)
+        if self.enable_grid_bbox and self._grid_tile_w_cfg is not None:
+            tile_w = min(self._grid_tile_w_cfg, self.w)
+            tile_h = min(self._grid_tile_h_cfg, self.h)
+            overlap = max(0, min(self._grid_overlap, min(tile_w, tile_h) - 4))
+            bboxes, weights = split_bboxes(self.w, self.h, tile_w, tile_h, overlap, self.get_tile_weights())
+            self.weights = weights
+            self.num_tiles = len(bboxes)
+            self.num_batches = math.ceil(self.num_tiles / self._grid_tile_bs_cfg)
+            self.tile_bs = math.ceil(len(bboxes) / self.num_batches)
+            self.tile_w = tile_w
+            self.tile_h = tile_h
+            self.batched_bboxes = [bboxes[i * self.tile_bs:(i + 1) * self.tile_bs] for i in range(self.num_batches)]
+        if self.enable_custom_bbox and old_h > 0 and old_w > 0:
+            scale_h = self.h / old_h
+            scale_w = self.w / old_w
+            for bbox in self.custom_bboxes:
+                bbox.x = int(round(bbox.x * scale_w))
+                bbox.y = int(round(bbox.y * scale_h))
+                bbox.w = max(1, int(round(bbox.w * scale_w)))
+                bbox.h = max(1, int(round(bbox.h * scale_h)))
+                bbox.w = min(bbox.w, self.w - bbox.x)
+                bbox.h = min(bbox.h, self.h - bbox.y)
+                bbox.box = [bbox.x, bbox.y, bbox.x + bbox.w, bbox.y + bbox.h]
+                bbox.slicer = slice(None), slice(None), slice(bbox.y, bbox.y + bbox.h), slice(bbox.x, bbox.x + bbox.w)
+                if bbox.feather_mask is not None:
+                    bbox.feather_mask = feather_mask(bbox.w, bbox.h, bbox.feather_ratio)
+        print(f'[Tiled Diffusion] Realign latent canvas {old_h}x{old_w} -> {self.h}x{self.w}')
+        return True
+
     @grid_bbox
     def init_grid_bbox(self, tile_w:int, tile_h:int, overlap:int, tile_bs:int):
         self.enable_grid_bbox = True
+        self._grid_tile_w_cfg = tile_w
+        self._grid_tile_h_cfg = tile_h
+        self._grid_overlap = overlap
+        self._grid_tile_bs_cfg = tile_bs
 
         self.tile_w = min(tile_w, self.w)
         self.tile_h = min(tile_h, self.h)
@@ -481,15 +524,14 @@ class AbstractDiffusion:
 
     @controlnet
     def set_controlnet_tensors_for_size(self, h_latent:int, w_latent:int):
-        '''Crop ControlNet hint to match a smaller latent size (e.g. init_latent in Noise Inversion).'''
+        '''Crop ControlNet hint to match latent tile spatial size.'''
         if not self.enable_controlnet: return
         if self.org_control_tensor_batch is None: return
 
         target_h, target_w = self._hint_pixel_size_from_x_spatial(h_latent, w_latent)
         print(
             f'[Tiled Diffusion] Crop ControlNet hint to {target_h}x{target_w} '
-            f'(x_in spatial {h_latent}x{w_latent}, canvas {int(self.p.height)}x{int(self.p.width)}) '
-            f'for Noise Inversion org_func fallback'
+            f'(latent {h_latent}x{w_latent}, canvas {int(self.p.height)}x{int(self.p.width)})'
         )
         for param_id in range(len(self.control_params)):
             param = self.control_params[param_id]
@@ -513,6 +555,33 @@ class AbstractDiffusion:
                         cropped_hr, size=(target_h, target_w), mode='bilinear', align_corners=False,
                     )
                 param.hr_hint_cond = cropped_hr.to(devices.device)
+
+    @controlnet
+    def _crop_controlnet_tile(self, control_tensor: Tensor, bbox: BBox) -> Tensor:
+        """Crop ControlNet hint for one latent tile; clip to hint bounds; uniform pixel size."""
+        if control_tensor.ndim == 3:
+            control_tensor = control_tensor.unsqueeze(0)
+
+        th = bbox[3] - bbox[1]
+        tw = bbox[2] - bbox[0]
+        target_h, target_w = th * opt_f, tw * opt_f
+
+        _, _, fh, fw = control_tensor.shape
+        y0 = max(0, min(bbox[1] * opt_f, fh))
+        y1 = max(0, min(bbox[3] * opt_f, fh))
+        x0 = max(0, min(bbox[0] * opt_f, fw))
+        x1 = max(0, min(bbox[2] * opt_f, fw))
+
+        if y1 > y0 and x1 > x0:
+            control_tile = control_tensor[:, :, y0:y1, x0:x1]
+        else:
+            control_tile = control_tensor[:, :, : min(target_h, fh), : min(target_w, fw)]
+
+        if control_tile.shape[-2] != target_h or control_tile.shape[-1] != target_w:
+            control_tile = torch.nn.functional.interpolate(
+                control_tile, size=(target_h, target_w), mode='bilinear', align_corners=False,
+            )
+        return control_tile
 
     @controlnet
     def prepare_controlnet_tensors(self, refresh:bool=False):
@@ -539,10 +608,7 @@ class AbstractDiffusion:
             for bboxes in self.batched_bboxes:
                 single_batch_tensors = []
                 for bbox in bboxes:
-                    if len(control_tensor.shape) == 3:
-                        control_tensor.unsqueeze_(0)
-                    control_tile = control_tensor[:, :, bbox[1]*opt_f:bbox[3]*opt_f, bbox[0]*opt_f:bbox[2]*opt_f]
-                    single_batch_tensors.append(control_tile)
+                    single_batch_tensors.append(self._crop_controlnet_tile(control_tensor, bbox))
                 control_tile = torch.cat(single_batch_tensors, dim=0)
                 if self.control_tensor_cpu:
                     control_tile = control_tile.cpu()
@@ -552,9 +618,7 @@ class AbstractDiffusion:
             if len(self.custom_bboxes) > 0:
                 custom_control_tile_list = []
                 for bbox in self.custom_bboxes:
-                    if len(control_tensor.shape) == 3:
-                        control_tensor.unsqueeze_(0)
-                    control_tile = control_tensor[:, :, bbox[1]*opt_f:bbox[3]*opt_f, bbox[0]*opt_f:bbox[2]*opt_f]
+                    control_tile = self._crop_controlnet_tile(control_tensor, bbox)
                     if self.control_tensor_cpu:
                         control_tile = control_tile.cpu()
                     custom_control_tile_list.append(control_tile)
@@ -733,6 +797,15 @@ class AbstractDiffusion:
         assert self.p.sampler_name == 'Euler'
 
         x = self.p.init_latent
+        _, _, lh, lw = x.shape
+        if (lh, lw) != (self.h, self.w):
+            self._rebuild_latent_canvas(lh, lw)
+            if self.enable_controlnet:
+                self.set_controlnet_tensors_for_size(lh, lw)
+        print(f'[MD-DIAG] init_latent shape={tuple(x.shape)} dtype={x.dtype} '
+              f'nan={torch.isnan(x).any().item()} inf={torch.isinf(x).any().item()} '
+              f'min={float(x.min().item()):.4g} max={float(x.max().item()):.4g} '
+              f'absmax={float(x.abs().max().item()):.4g}')
         s_in = x.new_ones([x.shape[0]])
         skip = 1 if shared.sd_model.parameterization == "v" else 0
         sigmas = dnw.get_sigmas(steps).flip(0)
@@ -766,7 +839,18 @@ class AbstractDiffusion:
             t = dnw.sigma_to_t(sigma_in)
             t = t / self.noise_inverse_retouch
 
-            eps = self.get_noise(x_in * c_in, t, cond_in, steps - i)
+            x_in_scaled = x_in * c_in
+            if i == 1:
+                print(f'[MD-DIAG] NI i=1 x_in_scaled nan={torch.isnan(x_in_scaled).any().item()} '
+                      f'absmax={float(x_in_scaled.abs().max().item()):.4g} '
+                      f'sigma={float(sigma_in[0].item()):.4g} t={float(t[0].item()):.4g} '
+                      f'c_in={float(c_in.flatten()[0].item()):.4g} c_out={float(c_out.flatten()[0].item()):.4g}')
+            eps = self.get_noise(x_in_scaled, t, cond_in, steps - i)
+            if i == 1:
+                eps_nan = torch.isnan(eps).any().item()
+                eps_inf = torch.isinf(eps).any().item()
+                eps_abs = float(eps.abs().max().item()) if not eps_nan else float('nan')
+                print(f'[MD-DIAG] NI i=1 eps nan={eps_nan} inf={eps_inf} absmax={eps_abs:.4g}')
             denoised = x_in + eps * c_out
 
             # Euler method:
