@@ -1,6 +1,14 @@
-# Release Notes (v1.01 to v2.1)
+# Release Notes (v1.01 to v2.2)
 
-This document contains release notes for versions v1.01 through v2.1 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.2 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.2
+
+- **Fixed**: **ControlNet SDXL bf16 dtype mismatch with LoRA** — SDXL UNet in bf16 with ControlNet hooked and LoRAs loaded could crash at step 0 with `RuntimeError: mat1 and mat2 must have the same dtype, but got Float and BFloat16` in main UNet `time_embed` (`hook.py`). Timestep embeddings stayed float32 while LoRA-patched Linear weights were bf16; autocast is a no-op for bf16 on this fork. Aligned dtypes in `extensions-builtin/sd-webui-controlnet` (`hook.py`, `cldm.py`, `controlnet_model_guess.py`); `extensions-builtin/Lora/networks.py` unchanged.
+- **Summary**: ControlNet Union Pro Max SDXL + multiple LoRAs + Hi-Res Fix on bf16; technical write-up in `md/A1111_ControlNet_SDXL_bf16_dtype_fix.md`.
+- **Release Note**: [v2.2 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.2)
 
 ---
 
