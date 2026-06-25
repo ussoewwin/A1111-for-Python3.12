@@ -472,6 +472,49 @@ class AbstractDiffusion:
             self.control_params[param_id].hint_cond = self.org_control_tensor_batch[param_id]
 
     @controlnet
+    def _hint_pixel_size_from_x_spatial(self, h: int, w: int) -> tuple[int, int]:
+        """Map x_in spatial dims to ControlNet hint pixels (never overshoot canvas)."""
+        px_h, px_w = int(self.p.height), int(self.p.width)
+        if h > self.h * 2 or w > self.w * 2:
+            return min(max(1, h), px_h), min(max(1, w), px_w)
+        return h * opt_f, w * opt_f
+
+    @controlnet
+    def set_controlnet_tensors_for_size(self, h_latent:int, w_latent:int):
+        '''Crop ControlNet hint to match a smaller latent size (e.g. init_latent in Noise Inversion).'''
+        if not self.enable_controlnet: return
+        if self.org_control_tensor_batch is None: return
+
+        target_h, target_w = self._hint_pixel_size_from_x_spatial(h_latent, w_latent)
+        print(
+            f'[Tiled Diffusion] Crop ControlNet hint to {target_h}x{target_w} '
+            f'(x_in spatial {h_latent}x{w_latent}, canvas {int(self.p.height)}x{int(self.p.width)}) '
+            f'for Noise Inversion org_func fallback'
+        )
+        for param_id in range(len(self.control_params)):
+            param = self.control_params[param_id]
+            full_hint = self.org_control_tensor_batch[param_id]
+            _, _, fh, fw = full_hint.shape
+            crop_h = min(fh, target_h)
+            crop_w = min(fw, target_w)
+            cropped = full_hint[:, :, :crop_h, :crop_w]
+            if crop_h < target_h or crop_w < target_w:
+                cropped = torch.nn.functional.interpolate(
+                    cropped, size=(target_h, target_w), mode='bilinear', align_corners=False,
+                )
+            param.hint_cond = cropped.to(devices.device)
+            if isinstance(param.hr_hint_cond, torch.Tensor):
+                _, _, h_hr, w_hr = param.hr_hint_cond.shape
+                crop_h_hr = min(h_hr, target_h)
+                crop_w_hr = min(w_hr, target_w)
+                cropped_hr = param.hr_hint_cond[:, :, :crop_h_hr, :crop_w_hr]
+                if crop_h_hr < target_h or crop_w_hr < target_w:
+                    cropped_hr = torch.nn.functional.interpolate(
+                        cropped_hr, size=(target_h, target_w), mode='bilinear', align_corners=False,
+                    )
+                param.hr_hint_cond = cropped_hr.to(devices.device)
+
+    @controlnet
     def prepare_controlnet_tensors(self, refresh:bool=False):
         ''' Crop the control tensor into tiles and cache them '''
 
@@ -518,12 +561,13 @@ class AbstractDiffusion:
                 self.control_tensor_custom.append(custom_control_tile_list)
 
     @controlnet
-    def switch_controlnet_tensors(self, batch_id:int, x_batch_size:int, tile_batch_size:int, is_denoise=False):
+    def switch_controlnet_tensors(self, batch_id:int, x_batch_size:int, tile_batch_size:int, is_denoise=False, tile_offset:int=0):
         if not self.enable_controlnet: return
         if self.control_tensor_batch is None: return
 
         for param_id in range(len(self.control_params)):
-            control_tile = self.control_tensor_batch[param_id][batch_id]
+            batch_tiles = self.control_tensor_batch[param_id][batch_id]
+            control_tile = batch_tiles[tile_offset:tile_offset + tile_batch_size]
             if self.is_kdiff:
                 all_control_tile = []
                 for i in range(tile_batch_size):

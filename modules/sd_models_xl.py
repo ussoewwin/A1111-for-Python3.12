@@ -51,8 +51,8 @@ sgm.models.diffusion.DiffusionEngine.get_learned_conditioning = get_learned_cond
 sgm.models.diffusion.DiffusionEngine.apply_model = apply_model
 sgm.models.diffusion.DiffusionEngine.get_first_stage_encoding = get_first_stage_encoding
 
-forge_tiled_vae.apply_diffusion_engine_vae_patch()
-
+# Forge tiled VAE at encode_first_stage / decode_first_stage (SD1.5 LatentDiffusion + SDXL DiffusionEngine).
+forge_tiled_vae.apply_all_vae_patches()
 
 def encode_embedding_init_text(self: sgm.modules.GeneralConditioner, init_text, nvpt):
     res = []

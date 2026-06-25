@@ -730,42 +730,69 @@ class Script(scripts.Script):
         if devices.get_optimal_device_name().startswith('cuda') and vae.device == devices.cpu and not vae_to_gpu:
             print("[Tiled VAE] warn: VAE is not on GPU, check 'Move VAE to GPU' if possible.")
 
+        w = int(getattr(p, 'width', 0) or 0)
+        h = int(getattr(p, 'height', 0) or 0)
+        if w <= 0 or h <= 0:
+            init_images = getattr(p, 'init_images', None) or []
+            if init_images:
+                w = int(getattr(init_images[0], 'width', 0) or 0)
+                h = int(getattr(init_images[0], 'height', 0) or 0)
+        pixels = w * h
+        hook_enc_tsize = int(encoder_tile_size)
+        hook_dec_tsize = int(decoder_tile_size)
+        if pixels >= 4_000_000:
+            hook_enc_tsize = min(hook_enc_tsize, 192)
+        elif pixels >= 2_500_000:
+            hook_enc_tsize = min(hook_enc_tsize, 256)
+        else:
+            hook_enc_tsize = min(hook_enc_tsize, 512)
+        hook_dec_tsize = min(hook_dec_tsize, 256)
+        if hook_enc_tsize != encoder_tile_size or hook_dec_tsize != decoder_tile_size:
+            print(
+                f"[Tiled VAE] VRAM cap for {w}x{h}: encoder tile {encoder_tile_size} -> {hook_enc_tsize}, "
+                f"decoder tile {decoder_tile_size} -> {hook_dec_tsize}"
+            )
+
         try:
             from modules import forge_tiled_vae
-            if forge_tiled_vae.is_patch_applied():
-                forge_tiled_vae.set_vae_always_tiled(enabled)
+            if forge_tiled_vae.applies_to_model(p.sd_model):
+                forge_tiled_vae.set_vae_tile_sizes(hook_enc_tsize, hook_dec_tsize)
+                forge_tiled_vae.set_vae_always_tiled(True)
                 print(
-                    "[Forge VAE] SDXL Forge encode/decode patch active — skipping multidiffusion VAEHook "
-                    "(no 3072px / 1x1 mega-tile)."
+                    "[Forge VAE] SD1.5/2.x Forge encode/decode patch active — skipping multidiffusion VAEHook "
+                    f"(encoder {hook_enc_tsize}px / decoder {hook_dec_tsize}px, 3-pass, accum CPU)."
                 )
-                if enabled:
-                    print(
-                        "[Forge VAE] VAE_ALWAYS_TILED ON (Enable Tiled VAE): "
-                        "512px encode / 64px decode, 3-pass (Forge parity)."
-                    )
                 return
         except Exception:
             pass
 
-        # do hijack
+        # Fallback: legacy VAEHook when Forge class patch is unavailable.
         kwargs = {
-            'fast_decoder': fast_decoder, 
-            'fast_encoder': fast_encoder, 
-            'color_fix':    color_fix, 
+            'fast_decoder': fast_decoder,
+            'fast_encoder': fast_encoder,
+            'color_fix':    color_fix,
             'to_gpu':       vae_to_gpu,
         }
 
-        # save original forward (only once)
         if not hasattr(encoder, 'original_forward'): setattr(encoder, 'original_forward', encoder.forward)
         if not hasattr(decoder, 'original_forward'): setattr(decoder, 'original_forward', decoder.forward)
 
         self.hooked = True
-        
-        encoder.forward = VAEHook(encoder, encoder_tile_size, is_decoder=False, **kwargs)
-        decoder.forward = VAEHook(decoder, decoder_tile_size, is_decoder=True,  **kwargs)
+
+        encoder.forward = VAEHook(encoder, hook_enc_tsize, is_decoder=False, **kwargs)
+        decoder.forward = VAEHook(decoder, hook_dec_tsize, is_decoder=True,  **kwargs)
 
     def postprocess(self, p:Processing, processed, enabled:bool, *args):
         if not enabled: return
+
+        try:
+            from modules import forge_tiled_vae
+            if forge_tiled_vae.applies_to_model(p.sd_model):
+                forge_tiled_vae.set_vae_always_tiled(False)
+                devices.torch_gc()
+                return
+        except Exception:
+            pass
 
         vae = p.sd_model.first_stage_model
         encoder = vae.encoder

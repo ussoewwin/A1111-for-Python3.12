@@ -91,10 +91,16 @@ class MixtureOfDiffusers(AbstractDiffusion):
                         # tcond
                         tcond_tile = self.get_tcond(c_in)      # cond, [1, 77, 768]
                         tcond_tile_list.append(tcond_tile)
-                        # icond: might be dummy for txt2img, latent mask for img2img
+                        # icond: might be dummy for txt2img, latent-space or pixel-space ControlNet hint
                         icond = self.get_icond(c_in)
                         if icond.shape[2:] == (self.h, self.w):
                             icond = icond[bbox.slicer]
+                        elif icond.shape[2:] == (self.h * 8, self.w * 8):
+                            icond = icond[
+                                :, :,
+                                bbox.y * 8:(bbox.y + bbox.h) * 8,
+                                bbox.x * 8:(bbox.x + bbox.w) * 8
+                            ]
                         icond_tile_list.append(icond)
                         # vcond:
                         vcond = self.get_vcond(c_in)
@@ -145,6 +151,12 @@ class MixtureOfDiffusers(AbstractDiffusion):
                     icond = self.get_icond(c_in)
                     if icond.shape[2:] == (self.h, self.w):
                         icond = icond[bbox.slicer]
+                    elif icond.shape[2:] == (self.h * 8, self.w * 8):
+                        icond = icond[
+                            :, :,
+                            bbox.y * 8:(bbox.y + bbox.h) * 8,
+                            bbox.x * 8:(bbox.x + bbox.w) * 8
+                        ]
                     vcond = self.get_vcond(c_in)
                     c_out = self.make_cond_dict(c_in, tcond, icond, vcond)
                     x_tile_out = shared.sd_model.apply_model(x_tile, t_in, cond=c_out)

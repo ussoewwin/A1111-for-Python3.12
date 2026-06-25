@@ -64,9 +64,9 @@ class DemoFusion(AbstractDiffusion):
         # txt cond
         tcond = self.get_tcond(cond_in)           # [B=1, L, D] => [B*N, L, D]
         tcond = self.repeat_tensor(tcond, n_rep)
-        # img cond
+        # img cond (ControlNet hint or latent mask)
         icond = self.get_icond(cond_in)
-        if icond.shape[2:] == (self.h, self.w):   # img2img, [B=1, C, H, W]
+        if icond.shape[2:] == (self.h, self.w):   # latent-space mask
             if mode == 0:
                 if self.p.random_jitter:
                     jitter_range = self.jitter_range
@@ -74,7 +74,18 @@ class DemoFusion(AbstractDiffusion):
                 icond = torch.cat([icond[bbox.slicer] for bbox in bboxes], dim=0)
             else:
                 icond = torch.cat([icond[:,:,bbox[1]::self.p.current_scale_num,bbox[0]::self.p.current_scale_num] for bbox in bboxes], dim=0)
-        else:                                     # txt2img, [B=1, C=5, H=1, W=1]
+        elif icond.shape[2:] == (self.h * 8, self.w * 8):  # pixel-space ControlNet hint
+            if mode == 0:
+                if self.p.random_jitter:
+                    jitter_range = self.jitter_range
+                    icond = F.pad(icond,(jitter_range, jitter_range, jitter_range, jitter_range),'constant',value=0)
+                icond = torch.cat([
+                    icond[:, :, bbox.y * 8:(bbox.y + bbox.h) * 8, bbox.x * 8:(bbox.x + bbox.w) * 8]
+                    for bbox in bboxes
+                ], dim=0)
+            else:
+                icond = torch.cat([icond[:,:,bbox[1]::self.p.current_scale_num,bbox[0]::self.p.current_scale_num] for bbox in bboxes], dim=0)
+        else:                                     # txt2img dummy hint
             icond = self.repeat_tensor(icond, n_rep)
 
         # vec cond (SDXL)

@@ -1,7 +1,9 @@
 """
-Forge (ComfyUI-style) tiled VAE for SDXL — ported from Forge backend/patcher/vae.py.
+Forge (ComfyUI-style) tiled VAE — ported from Forge backend/patcher/vae.py.
 
-Forge backend/patcher/vae.py parity for SDXL DiffusionEngine encode/decode:
+SDXL: DiffusionEngine.encode_first_stage / decode_first_stage (returns scaled latent tensor).
+SD 1.5 / 2.x: LatentDiffusion.encode_first_stage / decode_first_stage (returns DiagonalGaussianDistribution).
+
 VAE_ALWAYS_TILED -> always 512px/64px 3-pass tiled; else full batch then OOM tiled fallback.
 Bypasses multidiffusion VAEHook via encoder/decoder original_forward when present.
 """
@@ -52,14 +54,83 @@ OOM_EXCEPTIONS = _oom_exceptions()
 # Forge memory_management.VAE_ALWAYS_TILED — set from multidiffusion "Enable Tiled VAE" UI.
 VAE_ALWAYS_TILED = False
 
+# Base tile sizes for Forge 3-pass encode/decode (UI caps legacy VAEHook megatile sizes).
+_ENCODE_TILE_BASE = 512
+_DECODE_TILE_BASE = 64
+_ENCODE_OVERLAP_RATIO = 0.125  # Forge: 64 / 512
+_DECODE_OVERLAP_RATIO = 0.25   # Forge: 16 / 64
+
+# Set at apply_* time; sd_hijack CondFunc replaces class methods with lambdas so
+# __forge_tiled_vae__ on the class attribute is not a reliable runtime marker.
+_DIFFUSION_ENGINE_PATCH_APPLIED = False
+_LATENT_DIFFUSION_PATCH_APPLIED = False
+_patched_latent_diffusion_classes: set[type] = set()
+
 
 def set_vae_always_tiled(enabled: bool) -> None:
     global VAE_ALWAYS_TILED
     VAE_ALWAYS_TILED = bool(enabled)
 
 
+def set_vae_tile_sizes(encoder_tile: int = 512, decoder_tile: int = 64) -> None:
+    """Multidiffusion UI tile sliders — Forge 3-pass uses modest bases (not 3072 VAEHook tiles)."""
+    global _ENCODE_TILE_BASE, _DECODE_TILE_BASE
+    _ENCODE_TILE_BASE = max(128, min(512, int(encoder_tile)))
+    _DECODE_TILE_BASE = max(32, min(256, int(decoder_tile)))
+
+
+def get_encode_tile_base() -> int:
+    return _ENCODE_TILE_BASE
+
+
+def get_decode_tile_base() -> int:
+    return _DECODE_TILE_BASE
+
+
 def is_vae_always_tiled() -> bool:
     return VAE_ALWAYS_TILED
+
+
+def _tiled_accum_device():
+    """Forge intermediate_device() — keep full tiled buffers off GPU."""
+    return devices.cpu
+
+
+def _encode_overlap_for_base(base: int) -> int:
+    return max(16, min(base // 2, round(base * _ENCODE_OVERLAP_RATIO)))
+
+
+def _decode_overlap_for_base(base: int) -> int:
+    return max(8, min(base // 2, round(base * _DECODE_OVERLAP_RATIO)))
+
+
+def _effective_encode_base(height: int, width: int) -> int:
+    """Smaller tiles on large upscales to cap per-tile VAE encoder VRAM."""
+    base = _ENCODE_TILE_BASE
+    pixels = height * width
+    if pixels >= 4_000_000:
+        base = min(base, 192)
+    elif pixels >= 2_500_000:
+        base = min(base, 256)
+    return max(128, base)
+
+
+def _encode_passes(base: int, overlap: int):
+    return (
+        ((base, base), overlap),
+        ((base * 2, max(base // 2, 128)), overlap),
+        ((max(base // 2, 128), base * 2), overlap),
+    )
+
+
+def _decode_passes(base: int, overlap: int):
+    half = max(base // 2, 16)
+    double = min(base * 2, 256)
+    return (
+        ((half, double), overlap),
+        ((double, half), overlap),
+        ((base, base), overlap),
+    )
 
 
 @contextlib.contextmanager
@@ -83,7 +154,7 @@ def _bypass_vae_hooks(vae):
             dec.forward = dec_saved
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def tiled_scale_multidim(
     samples,
     function: Callable,
@@ -272,166 +343,212 @@ def _vae_progress_bar(is_decoder: bool, total: int):
 
 def _log_encode_tile_grid(pixel_samples: torch.Tensor) -> None:
     _, _, h, w = pixel_samples.shape
-    overlap = 64
+    base = _effective_encode_base(h, w)
+    overlap = _encode_overlap_for_base(base)
+    passes = _encode_passes(base, overlap)
     grids = [
-        (_tile_position_count(h, 512, overlap), _tile_position_count(w, 512, overlap)),
-        (_tile_position_count(h, 1024, overlap), _tile_position_count(w, 256, overlap)),
-        (_tile_position_count(h, 256, overlap), _tile_position_count(w, 1024, overlap)),
+        (
+            _tile_position_count(h, passes[0][0][0], overlap),
+            _tile_position_count(w, passes[0][0][1], overlap),
+        ),
+        (
+            _tile_position_count(h, passes[1][0][0], overlap),
+            _tile_position_count(w, passes[1][0][1], overlap),
+        ),
+        (
+            _tile_position_count(h, passes[2][0][0], overlap),
+            _tile_position_count(w, passes[2][0][1], overlap),
+        ),
     ]
+    total = sum(g[0] * g[1] for g in grids)
     print(
         f"[Forge VAE] Tiled encode {h}x{w}px - tile grids (3-pass): "
         f"{grids[0][0]}x{grids[0][1]}, {grids[1][0]}x{grids[1][1]}, {grids[2][0]}x{grids[2][1]} "
-        f"(512/1024/256px tiles, overlap {overlap}; not 1x1 @3072)"
+        f"({passes[0][0][0]}x{passes[0][0][1]} / {passes[1][0][0]}x{passes[1][0][1]} / "
+        f"{passes[2][0][0]}x{passes[2][0][1]}px, overlap {overlap}, ~{total} steps; "
+        f"base {base}px, accum on CPU)"
     )
 
 
 def _log_decode_tile_grid(latent_samples: torch.Tensor) -> None:
     _, _, h, w = latent_samples.shape
-    overlap = 16
+    base = _DECODE_TILE_BASE
+    overlap = _decode_overlap_for_base(base)
+    passes = _decode_passes(base, overlap)
     grids = [
-        (_tile_position_count(h, 32, overlap), _tile_position_count(w, 128, overlap)),
-        (_tile_position_count(h, 128, overlap), _tile_position_count(w, 32, overlap)),
-        (_tile_position_count(h, 64, overlap), _tile_position_count(w, 64, overlap)),
+        (
+            _tile_position_count(h, passes[0][0][0], overlap),
+            _tile_position_count(w, passes[0][0][1], overlap),
+        ),
+        (
+            _tile_position_count(h, passes[1][0][0], overlap),
+            _tile_position_count(w, passes[1][0][1], overlap),
+        ),
+        (
+            _tile_position_count(h, passes[2][0][0], overlap),
+            _tile_position_count(w, passes[2][0][1], overlap),
+        ),
     ]
     lh, lw = h * DOWNSCALE_RATIO, w * DOWNSCALE_RATIO
+    total = sum(g[0] * g[1] for g in grids)
     print(
         f"[Forge VAE] Tiled decode latent {h}x{w} -> ~{lh}x{lw}px - tile grids (3-pass): "
         f"{grids[0][0]}x{grids[0][1]}, {grids[1][0]}x{grids[1][1]}, {grids[2][0]}x{grids[2][1]} "
-        f"(64px base, overlap {overlap})"
+        f"({base}px base, overlap {overlap}, ~{total} steps, accum on CPU)"
     )
+
+
+def _vae_encode_latent_tensor(vae, x: torch.Tensor) -> torch.Tensor:
+    """VAE.encode -> BCHW latent mean (SD1.5 DiagonalGaussianDistribution or SDXL tensor)."""
+    encoded = vae.encode(x)
+    if hasattr(encoded, "mode"):
+        return encoded.mode().float()
+    return encoded.float()
+
+
+def _posterior_from_latent_mode(z_mode: torch.Tensor):
+    from ldm.modules.distributions.distributions import DiagonalGaussianDistribution
+
+    logvar = torch.zeros_like(z_mode)
+    parameters = torch.cat([z_mode, logvar], dim=1)
+    return DiagonalGaussianDistribution(parameters, deterministic=True)
+
+
+def is_diffusion_engine_patched() -> bool:
+    return _DIFFUSION_ENGINE_PATCH_APPLIED
+
+
+def is_latent_diffusion_patched() -> bool:
+    return _LATENT_DIFFUSION_PATCH_APPLIED
 
 
 def is_patch_applied() -> bool:
-    try:
-        import sgm.models.diffusion as diffusion_module
+    return is_diffusion_engine_patched() or is_latent_diffusion_patched()
 
-        return getattr(diffusion_module.DiffusionEngine.encode_first_stage, "__forge_tiled_vae__", False)
-    except Exception:
+
+def applies_to_model(sd_model) -> bool:
+    """True when Forge tiled VAE patch is active for this checkpoint family."""
+    if sd_model is None:
         return False
+    if getattr(sd_model, "is_sdxl", False):
+        return is_diffusion_engine_patched()
+    if getattr(sd_model, "is_sd3", False):
+        return False
+    return is_latent_diffusion_patched() and hasattr(sd_model, "first_stage_model")
+
+
+def _forge_3pass_tiled(
+    samples: torch.Tensor,
+    fn: Callable,
+    passes,
+    upscale_amount,
+    out_channels: int,
+    output_device,
+    downscale: bool,
+    pbar: Optional[tqdm],
+) -> torch.Tensor:
+    """Forge encode_tiled_ / decode_tiled_ 3-pass average — no in-place += on tiled tensors."""
+    acc = None
+    for (tile_y, tile_x), overlap in passes:
+        part = tiled_scale(
+            samples,
+            fn,
+            tile_x,
+            tile_y,
+            overlap,
+            upscale_amount=upscale_amount,
+            out_channels=out_channels,
+            output_device=output_device,
+            downscale=downscale,
+            pbar=pbar,
+        )
+        acc = part if acc is None else acc + part
+    return acc / 3.0
 
 
 def _encode_tiled(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tensor:
+    orig_device = pixel_samples.device
+    accum_device = _tiled_accum_device()
+    if orig_device != accum_device:
+        pixel_samples = pixel_samples.to(device=accum_device)
     _log_encode_tile_grid(pixel_samples)
-    output_device = device
+    _, _, h, w = pixel_samples.shape
+    base = _effective_encode_base(h, w)
+    overlap = _encode_overlap_for_base(base)
+    encode_passes = _encode_passes(base, overlap)
+    output_device = _tiled_accum_device()
 
     def encode_fn(a):
         a = a.to(dtype=dtype, device=device)
-        return vae.encode(a).float()
+        try:
+            return _vae_encode_latent_tensor(vae, a)
+        finally:
+            devices.torch_gc()
 
     upscale = 1.0 / DOWNSCALE_RATIO
-    encode_passes = (
-        ((512, 512), 64),
-        ((512 * 2, 512 // 2), 64),
-        ((512 // 2, 512 * 2), 64),
-    )
     total_steps = sum(
-        _count_tiled_scale_steps(pixel_samples.shape, tile, overlap)
-        for tile, overlap in encode_passes
+        _count_tiled_scale_steps(pixel_samples.shape, tile, ov)
+        for tile, ov in encode_passes
     )
     pbar = _vae_progress_bar(is_decoder=False, total=total_steps)
     try:
-        samples = tiled_scale(
+        samples = _forge_3pass_tiled(
             pixel_samples,
             encode_fn,
-            512,
-            512,
-            64,
+            encode_passes,
             upscale_amount=upscale,
             out_channels=LATENT_CHANNELS,
             output_device=output_device,
-            downscale=True,
-            pbar=pbar,
-        )
-        samples += tiled_scale(
-            pixel_samples,
-            encode_fn,
-            512 * 2,
-            512 // 2,
-            64,
-            upscale_amount=upscale,
-            out_channels=LATENT_CHANNELS,
-            output_device=output_device,
-            downscale=True,
-            pbar=pbar,
-        )
-        samples += tiled_scale(
-            pixel_samples,
-            encode_fn,
-            512 // 2,
-            512 * 2,
-            64,
-            upscale_amount=upscale,
-            out_channels=LATENT_CHANNELS,
-            output_device=output_device,
-            downscale=True,
+            downscale=False,
             pbar=pbar,
         )
     finally:
         if pbar is not None:
             pbar.close()
-    samples /= 3.0
-    return samples
+    devices.torch_gc()
+    return samples.to(device=orig_device)
 
 
 def _decode_tiled(vae, latent_samples: torch.Tensor, dtype, device) -> torch.Tensor:
+    orig_device = latent_samples.device
+    accum_device = _tiled_accum_device()
+    if orig_device != accum_device:
+        latent_samples = latent_samples.to(device=accum_device)
     _log_decode_tile_grid(latent_samples)
-    output_device = device
+    base = _DECODE_TILE_BASE
+    overlap = _decode_overlap_for_base(base)
+    decode_passes = _decode_passes(base, overlap)
+    output_device = _tiled_accum_device()
 
     def decode_fn(a):
         a = a.to(dtype=dtype, device=device)
-        return vae.decode(a).float()
+        try:
+            return vae.decode(a).float()
+        finally:
+            devices.torch_gc()
 
     upscale = DOWNSCALE_RATIO
-    decode_passes = (
-        ((64 // 2, 64 * 2), 16),
-        ((64 * 2, 64 // 2), 16),
-        ((64, 64), 16),
-    )
     total_steps = sum(
-        _count_tiled_scale_steps(latent_samples.shape, tile, overlap)
-        for tile, overlap in decode_passes
+        _count_tiled_scale_steps(latent_samples.shape, tile, ov)
+        for tile, ov in decode_passes
     )
     pbar = _vae_progress_bar(is_decoder=True, total=total_steps)
     try:
-        output = (
-            tiled_scale(
-                latent_samples,
-                decode_fn,
-                64 // 2,
-                64 * 2,
-                16,
-                upscale_amount=upscale,
-                out_channels=PIXEL_CHANNELS,
-                output_device=output_device,
-                pbar=pbar,
-            )
-            + tiled_scale(
-                latent_samples,
-                decode_fn,
-                64 * 2,
-                64 // 2,
-                16,
-                upscale_amount=upscale,
-                out_channels=PIXEL_CHANNELS,
-                output_device=output_device,
-                pbar=pbar,
-            )
-            + tiled_scale(
-                latent_samples,
-                decode_fn,
-                64,
-                64,
-                16,
-                upscale_amount=upscale,
-                out_channels=PIXEL_CHANNELS,
-                output_device=output_device,
-                pbar=pbar,
-            )
-        ) / 3.0
+        output = _forge_3pass_tiled(
+            latent_samples,
+            decode_fn,
+            decode_passes,
+            upscale_amount=upscale,
+            out_channels=PIXEL_CHANNELS,
+            output_device=output_device,
+            downscale=False,
+            pbar=pbar,
+        )
     finally:
         if pbar is not None:
             pbar.close()
-    return output
+    devices.torch_gc()
+    return output.to(device=orig_device)
 
 
 def _encode_full(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tensor:
@@ -442,7 +559,7 @@ def _encode_full(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tenso
     out = None
     for start in range(0, pixel_samples.shape[0], batch_number):
         chunk = pixel_samples[start : start + batch_number].to(dtype=dtype, device=device)
-        encoded = vae.encode(chunk).float()
+        encoded = _vae_encode_latent_tensor(vae, chunk)
         if out is None:
             out = torch.empty(
                 (pixel_samples.shape[0],) + tuple(encoded.shape[1:]),
@@ -530,11 +647,97 @@ def forge_decode_first_stage(self, z):
     return out
 
 
-def apply_diffusion_engine_vae_patch():
+@torch.no_grad()
+def forge_ldm_encode_first_stage(self, x):
+    if hasattr(self, "split_input_params") and self.split_input_params.get("patch_distributed_vq"):
+        return self._forge_encode_first_stage_original(x)
+
+    vae = self.first_stage_model
+    device, dtype = _vae_device_dtype(vae)
+    disable = getattr(self, "disable_first_stage_autocast", False)
+
+    with _bypass_vae_hooks(vae):
+        with torch.autocast("cuda", enabled=not disable):
+            if VAE_ALWAYS_TILED:
+                z_mode = _encode_tiled(vae, x, dtype, device)
+                devices.torch_gc()
+                return _posterior_from_latent_mode(z_mode)
+            try:
+                return vae.encode(x)
+            except OOM_EXCEPTIONS:
+                print(
+                    "Warning: Encountered Out of Memory during VAE Encoding; "
+                    "Retrying with Tiled VAE Encoding..."
+                )
+                devices.torch_gc()
+                z_mode = _encode_tiled(vae, x, dtype, device)
+                devices.torch_gc()
+                return _posterior_from_latent_mode(z_mode)
+
+
+@torch.no_grad()
+def forge_ldm_decode_first_stage(self, z, predict_cids=False, force_not_quantize=False):
+    if hasattr(self, "split_input_params") and self.split_input_params.get("patch_distributed_vq"):
+        return self._forge_decode_first_stage_original(
+            z, predict_cids=predict_cids, force_not_quantize=force_not_quantize
+        )
+
+    if predict_cids:
+        if z.dim() == 4:
+            z = torch.argmax(z.exp(), dim=1).long()
+        z = self.first_stage_model.quantize.get_codebook_entry(z, shape=None)
+        from einops import rearrange
+
+        z = rearrange(z, "b h w c -> b c h w").contiguous()
+
+    z = 1.0 / self.scale_factor * z
+    disable = getattr(self, "disable_first_stage_autocast", False)
+    with torch.autocast("cuda", enabled=not disable):
+        vae = self.first_stage_model
+        try:
+            from ldm.models.autoencoder import VQModelInterface
+
+            if isinstance(vae, VQModelInterface):
+                return vae.decode(z, force_not_quantize=predict_cids or force_not_quantize)
+        except Exception:
+            pass
+        return decode_latent(vae, z)
+
+
+def _patch_latent_diffusion_class(ld_class) -> None:
+    global _LATENT_DIFFUSION_PATCH_APPLIED, _patched_latent_diffusion_classes
+    if ld_class in _patched_latent_diffusion_classes:
+        return
+
+    ld_class._forge_encode_first_stage_original = ld_class.encode_first_stage
+    ld_class._forge_decode_first_stage_original = ld_class.decode_first_stage
+    ld_class.encode_first_stage = forge_ldm_encode_first_stage
+    ld_class.decode_first_stage = forge_ldm_decode_first_stage
+    ld_class.encode_first_stage.__forge_tiled_vae__ = True
+    ld_class.decode_first_stage.__forge_tiled_vae__ = True
+    _patched_latent_diffusion_classes.add(ld_class)
+
+
+def apply_latent_diffusion_vae_patch() -> None:
+    global _LATENT_DIFFUSION_PATCH_APPLIED
+    import ldm.models.diffusion.ddpm as ldm_ddpm
+
+    _patch_latent_diffusion_class(ldm_ddpm.LatentDiffusion)
+    try:
+        import modules.models.diffusion.ddpm_edit as ddpm_edit
+
+        _patch_latent_diffusion_class(ddpm_edit.LatentDiffusion)
+    except Exception:
+        pass
+    _LATENT_DIFFUSION_PATCH_APPLIED = len(_patched_latent_diffusion_classes) > 0
+
+
+def apply_diffusion_engine_vae_patch() -> None:
+    global _DIFFUSION_ENGINE_PATCH_APPLIED
     import sgm.models.diffusion as diffusion_module
 
     de = diffusion_module.DiffusionEngine
-    if getattr(de.encode_first_stage, "__forge_tiled_vae__", False):
+    if _DIFFUSION_ENGINE_PATCH_APPLIED:
         return
 
     de._forge_encode_first_stage_original = de.encode_first_stage
@@ -543,3 +746,9 @@ def apply_diffusion_engine_vae_patch():
     de.decode_first_stage = forge_decode_first_stage
     de.encode_first_stage.__forge_tiled_vae__ = True
     de.decode_first_stage.__forge_tiled_vae__ = True
+    _DIFFUSION_ENGINE_PATCH_APPLIED = True
+
+
+def apply_all_vae_patches() -> None:
+    apply_diffusion_engine_vae_patch()
+    apply_latent_diffusion_vae_patch()

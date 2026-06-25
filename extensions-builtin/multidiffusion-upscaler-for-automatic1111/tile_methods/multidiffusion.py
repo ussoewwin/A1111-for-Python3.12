@@ -57,12 +57,15 @@ class MultiDiffusion(AbstractDiffusion):
             return self.sampler_forward(x, sigma_in, cond=cond)
 
         def repeat_func(x_tile:Tensor, bboxes:List[CustomBBox]) -> Tensor:
-            # For kdiff sampler, the dim 0 of input x_in is:
-            #   = batch_size * (num_AND + 1)   if not an edit model
-            #   = batch_size * (num_AND + 2)   otherwise
-            sigma_tile = self.repeat_tensor(sigma_in, len(bboxes))
-            cond_tile = self.repeat_cond_dict(cond, bboxes)
-            return self.sampler_forward(x_tile, sigma_tile, cond=cond_tile)
+            # Process one tile at a time to cap VRAM peak (ControlNet + tiled latent).
+            outs = []
+            batch_per_tile = x_tile.shape[0] // len(bboxes)
+            for i, bbox in enumerate(bboxes):
+                xt = x_tile[i * batch_per_tile:(i + 1) * batch_per_tile]
+                sigma_tile = self.repeat_tensor(sigma_in, 1)
+                cond_tile = self.repeat_cond_dict(cond, [bbox])
+                outs.append(self.sampler_forward(xt, sigma_tile, cond=cond_tile))
+            return torch.cat(outs, dim=0)
 
         def custom_func(x:Tensor, bbox_id:int, bbox:CustomBBox) -> Tensor:
             return self.kdiff_custom_forward(x, sigma_in, cond, bbox_id, bbox, self.sampler_forward)
@@ -79,13 +82,17 @@ class MultiDiffusion(AbstractDiffusion):
             return self.sampler_forward(x, ts_in, cond=cond)
 
         def repeat_func(x_tile:Tensor, bboxes:List[CustomBBox]) -> Tuple[Tensor, Tensor]:
-            n_rep = len(bboxes)
-            ts_tile = self.repeat_tensor(ts_in, n_rep)
-            if isinstance(cond, dict):   # FIXME: when will enter this branch?
-                cond_tile = self.repeat_cond_dict(cond, bboxes)
-            else:
-                cond_tile = self.repeat_tensor(cond, n_rep)
-            return self.sampler_forward(x_tile, ts_tile, cond=cond_tile)
+            outs = []
+            batch_per_tile = x_tile.shape[0] // len(bboxes)
+            for i, bbox in enumerate(bboxes):
+                xt = x_tile[i * batch_per_tile:(i + 1) * batch_per_tile]
+                ts_tile = self.repeat_tensor(ts_in, 1)
+                if isinstance(cond, dict):
+                    cond_tile = self.repeat_cond_dict(cond, [bbox])
+                else:
+                    cond_tile = self.repeat_tensor(cond, 1)
+                outs.append(self.sampler_forward(xt, ts_tile, cond=cond_tile))
+            return torch.cat(outs, dim=0)
 
         def custom_func(x:Tensor, bbox_id:int, bbox:CustomBBox) -> Tensor:
             # before the final forward, we can set the control tensor
@@ -109,6 +116,25 @@ class MultiDiffusion(AbstractDiffusion):
             shape = [n] + [1] * r_dims      # [N, 1, ...]
             return x.repeat(shape)
 
+    def _pixel_slicer(self, bbox:BBox) -> tuple:
+        '''latent-space bbox -> pixel-space slicer for ControlNet hint (VAE downscale=8)'''
+        return (
+            slice(None),
+            slice(None),
+            slice(bbox.y * 8, (bbox.y + bbox.h) * 8),
+            slice(bbox.x * 8, (bbox.x + bbox.w) * 8),
+        )
+
+    def _slice_icond_for_bboxes(self, icond:Tensor, bboxes:List[CustomBBox]) -> Tensor:
+        '''Tile a ControlNet hint to match latent bboxes. Handles latent-space hints,
+        pixel-space hints (downscale 8), and txt2img dummy hints.'''
+        if icond.shape[2:] == (self.h, self.w):                 # already latent-space
+            return torch.cat([icond[bbox.slicer] for bbox in bboxes], dim=0)
+        if icond.shape[2:] == (self.h * 8, self.w * 8):         # pixel-space hint
+            return torch.cat([icond[self._pixel_slicer(bbox)] for bbox in bboxes], dim=0)
+        # txt2img dummy hint [B, C, 1, 1] etc.
+        return self.repeat_tensor(icond, len(bboxes))
+
     def repeat_cond_dict(self, cond_in:CondDict, bboxes:List[CustomBBox]) -> CondDict:
         ''' repeat all tensors in cond_dict on it's first dim (for a batch of tiles), returns a new object '''
         # n_repeat
@@ -116,12 +142,8 @@ class MultiDiffusion(AbstractDiffusion):
         # txt cond
         tcond = self.get_tcond(cond_in)           # [B=1, L, D] => [B*N, L, D]
         tcond = self.repeat_tensor(tcond, n_rep)
-        # img cond
-        icond = self.get_icond(cond_in)
-        if icond.shape[2:] == (self.h, self.w):   # img2img, [B=1, C, H, W]
-            icond = torch.cat([icond[bbox.slicer] for bbox in bboxes], dim=0)
-        else:                                     # txt2img, [B=1, C=5, H=1, W=1]
-            icond = self.repeat_tensor(icond, n_rep)
+        # img cond (ControlNet hint)
+        icond = self._slice_icond_for_bboxes(self.get_icond(cond_in), bboxes)
         # vec cond (SDXL)
         vcond = self.get_vcond(cond_in)           # [B=1, D]
         if vcond is not None:
@@ -139,9 +161,12 @@ class MultiDiffusion(AbstractDiffusion):
 
         N, C, H, W = x_in.shape
         if (H, W) != (self.h, self.w):
-            # We don't tile highres, let's just use the original org_func
+            # Noise Inversion uses init_latent at input resolution while self.h/w are upscale target.
+            # Crop ControlNet hint to current latent size to avoid full-resolution UNet forward OOM.
+            self.set_controlnet_tensors_for_size(H, W)
+            out = org_func(x_in)
             self.reset_controlnet_tensors()
-            return org_func(x_in)
+            return out
 
         # clear buffer canvas
         self.reset_buffer(x_in)
@@ -154,16 +179,14 @@ class MultiDiffusion(AbstractDiffusion):
                 # batching
                 x_tile = torch.cat([x_in[bbox.slicer] for bbox in bboxes], dim=0)   # [TB, C, TH, TW]
 
-                # controlnet tiling
-                # FIXME: is_denoise is default to False, however it is set to True in case of MixtureOfDiffusers, why?
-                self.switch_controlnet_tensors(batch_id, N, len(bboxes))
-
                 # stablesr tiling
                 self.switch_stablesr_tensors(batch_id)
 
                 # compute tiles with micro-batch plan to avoid VRAM spikes
                 tb = len(bboxes)
-                if tb == 6:
+                if self.enable_controlnet:
+                    micro_plan = [1] * tb
+                elif tb == 6:
                     micro_plan = [3, 3]
                 elif tb >= 4:
                     micro_plan = [2] * (tb // 2)
@@ -174,6 +197,7 @@ class MultiDiffusion(AbstractDiffusion):
                     micro_plan = [tb]
 
                 if micro_plan == [tb]:
+                    self.switch_controlnet_tensors(batch_id, N, tb, tile_offset=0)
                     x_tile_out = repeat_func(x_tile, bboxes)
                 else:
                     outs = []
@@ -181,9 +205,7 @@ class MultiDiffusion(AbstractDiffusion):
                     for m in micro_plan:
                         bb = bboxes[k:k+m]
                         xt = x_tile[k * N:(k + m) * N, :, :, :]
-                        # Adjust ControlNet tensors only when micro-batch size differs from full batch
-                        if m != tb:
-                            self.switch_controlnet_tensors(batch_id, N, len(bb))
+                        self.switch_controlnet_tensors(batch_id, N, m, tile_offset=k)
                         outs.append(repeat_func(xt, bb))
                         k += m
                     x_tile_out = torch.cat(outs, dim=0)
@@ -249,18 +271,19 @@ class MultiDiffusion(AbstractDiffusion):
             return shared.sd_model.apply_model(x, sigma_in, cond=cond_in_original)
 
         def repeat_func(x_tile:Tensor, bboxes:List[CustomBBox]):
-            sigma_in_tile = sigma_in.repeat(len(bboxes))
-            cond_out = self.repeat_cond_dict(cond_in_original, bboxes)
-            x_tile_out = shared.sd_model.apply_model(x_tile, sigma_in_tile, cond=cond_out)
-            return x_tile_out
+            outs = []
+            batch_per_tile = x_tile.shape[0] // len(bboxes)
+            for i, bbox in enumerate(bboxes):
+                xt = x_tile[i * batch_per_tile:(i + 1) * batch_per_tile]
+                cond_out = self.repeat_cond_dict(cond_in_original, [bbox])
+                outs.append(shared.sd_model.apply_model(xt, sigma_in, cond=cond_out))
+            return torch.cat(outs, dim=0)
 
         def custom_func(x:Tensor, bbox_id:int, bbox:CustomBBox):
             # The negative prompt in custom bbox should not be used for noise inversion
             # otherwise the result will be astonishingly bad.
             tcond = Condition.reconstruct_cond(bbox.cond, step).unsqueeze_(0)
-            icond = self.get_icond(cond_in_original)
-            if icond.shape[2:] == (self.h, self.w):
-                icond = icond[bbox.slicer]
+            icond = self._slice_icond_for_bboxes(self.get_icond(cond_in_original), [bbox])
             cond_out = self.make_cond_dict(cond_in, tcond, icond)
             return shared.sd_model.apply_model(x, sigma_in, cond=cond_out)
 
