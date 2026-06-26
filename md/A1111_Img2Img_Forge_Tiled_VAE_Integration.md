@@ -11,19 +11,22 @@ All “before” behavior in this document is taken from:
 | Role | Commit | Message |
 |------|--------|---------|
 | **Baseline (前回)** | `278fd71238a10da6a8b55e5b08a657c0ce97fc20` | Update README.md |
-| After fix (feature tip) | `24aefab9` | fix: MultiDiffusion latent canvas alignment and Forge VAE tile NaN |
+| Integration tip (canvas + VAE) | `24aefab9` | fix: MultiDiffusion latent canvas alignment and Forge VAE tile NaN |
+| **Current tip (includes Noise Inversion broadcast fix)** | `fd306900` | fix(tiled-diffusion): align noise/x to init_latent canvas in Noise Inversion |
 
-Intermediate commits on `278fd712..24aefab9`:
+Intermediate commits on `278fd712..fd306900` (code path):
 
 - `e9ab00ae` — feat: Forge-parity SDXL tiled VAE encode/decode with progress bar
 - `88d89476` — fix: MultiDiffusion Noise Inversion OOM and Forge tiled VAE encode scale
 - `24aefab9` — fix: MultiDiffusion latent canvas alignment and Forge VAE tile NaN
+- `fd306900` — fix: Noise Inversion `renoise_mask` broadcast mismatch (231 vs 232 latent width)
 
-To reproduce baseline sources locally:
+To reproduce sources locally:
 
 ```bash
 git show 278fd71238a10da6a8b55e5b08a657c0ce97fc20:extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
 git diff 278fd71238a10da6a8b55e5b08a657c0ce97fc20..24aefab9
+git diff 24aefab9..fd306900 -- extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
 ```
 
 ---
@@ -92,7 +95,7 @@ if (H, W) != (self.h, self.w):
 
 ---
 
-## 2. Role of the Three Commits
+## 2. Role of the Commits
 
 ```
 278fd712  (README only)
@@ -102,6 +105,8 @@ e9ab00ae  feat: Forge-parity SDXL tiled VAE encode/decode with progress bar
 88d89476  fix: MultiDiffusion Noise Inversion OOM and Forge tiled VAE encode scale
     |
 24aefab9  fix: MultiDiffusion latent canvas alignment and Forge VAE tile NaN
+    |
+fd306900  fix: align noise/x to init_latent in Noise Inversion sample_img2img (231 vs 232)
 ```
 
 ### 2-1. `e9ab00ae` — Bookend VRAM Mitigation
@@ -259,6 +264,49 @@ for d in range(dims):
 
 This was the direct cause of “first image OK, second image NG” and resolution-dependent failures.
 
+### 2-4. `fd306900` — Noise Inversion broadcast fix (231 vs 232)
+
+**Observed failure (2026-06-26):** img2img with MultiDiffusion + Noise Inversion + ControlNet tile + Forge tiled VAE encode. Image **1853×1254** px. Noise Inversion completed; crash on `combined_noise` blend:
+
+```
+RuntimeError: The size of tensor a (231) must match the size of tensor b (232) at non-singleton dimension 3
+```
+
+Location: `abstractdiffusion.py` — `combined_noise = ((1 - renoise_mask) * inverse_noise + renoise_mask * noise) / ...`
+
+#### Root cause (two different latent width rules)
+
+| Tensor | How size is chosen | 1853×1254 example |
+|--------|-------------------|-------------------|
+| `p.init_latent` | Forge tiled VAE encode → latent width uses **ceil** (`pixel_to_latent_w`) | **157×232** |
+| `noise`, `x` (sampler args) | A1111 `create_random_tensors` uses **floor** (`width//8`, `height//8`) | **156×231** |
+| `self.h`, `self.w` (canvas) | After `_rebuild_latent_canvas`, matches `init_latent` | **157×232** |
+| `renoise_mask` | `F.interpolate(..., size=noise.shape[-2:])` | **156×231** |
+| `inverse_noise` | `latent - p.init_latent / sigmas[0]` from inversion on full canvas | **157×232** |
+
+`24aefab9` fixed canvas and ControlNet alignment to `init_latent`, but **did not resize** the `noise` and `x` tensors passed into `sample_img2img`. After inversion, `inverse_noise` is full-canvas size while `renoise_mask` and `noise` stayed floor-sized → broadcast error on width **231 vs 232**.
+
+#### Fix
+
+Module-level helper `_align_latent_to_canvas(t, lh, lw)`:
+
+- If `t` is smaller: **replicate** the last row/column (edge padding), not new random noise.
+- If `t` is larger: copy the top-left `min(h,w)` region (crop).
+
+At the **start** of `sample_img2img`, before building `renoise_mask`:
+
+```python
+_, _, _lh, _lw = p.init_latent.shape
+if noise.shape[-2:] != (_lh, _lw):
+    noise = _align_latent_to_canvas(noise, _lh, _lw)
+if x.shape[-2:] != (_lh, _lw):
+    x = _align_latent_to_canvas(x, _lh, _lw)
+```
+
+Then `renoise_mask` interpolates to `noise.shape[-2:]` which matches `inverse_noise`. No change to UI settings or Forge VAE tile sizes.
+
+**Why edge replication:** The extra latent column/row corresponds to partial pixel coverage at the image boundary (width not divisible by 8). Duplicating the boundary noise/latent values preserves the distribution of the existing tensor and avoids injecting fresh randomness into one column.
+
 ---
 
 ## 3. UI Settings Unchanged
@@ -306,6 +354,7 @@ Correct summary:
 - **`e9ab00ae`**: added Forge-compatible tiled VAE for bookend VRAM.
 - **`88d89476`**: fixed downscale bug and Noise Inversion OOM from integration.
 - **`24aefab9`**: fixed non-multiple-of-8 latent dimensions and edge-tile NaN.
+- **`fd306900`**: fixed Noise Inversion crash when `init_latent` is ceil-sized but A1111 `noise`/`x` are floor-sized (e.g. 231 vs 232).
 
 ---
 
@@ -313,9 +362,10 @@ Correct summary:
 
 ### 6-1. Cases to Verify
 
-- More unusual resolutions (height also not a multiple of 8)
+- More unusual resolutions (height also not a multiple of 8) — `fd306900` handles the common width-ceil / noise-floor case; retest height-only edge cases on SDXL
 - Same alignment on the SDXL path
 - Other tile size / overlap combinations
+- End-to-end rerun of **1853×1254** + Noise Inversion stack after `fd306900` (log showed inversion OK; sampling step was where it failed before)
 
 ### 6-2. Debug Logs to Remove
 
@@ -329,12 +379,13 @@ Added in `24aefab9`; remove after stability is confirmed.
 - `pixel_to_latent_h()` / `pixel_to_latent_w()` asymmetry matches **VAE behavior**. Do not “symmetrize” or canvas mismatch returns.
 - Skipping `_rebuild_latent_canvas()` and restoring `org_func` can bring back OOM with Noise Inversion.
 - Changing Forge VAE `downscale` will desync latent size from MultiDiffusion.
+- Removing the `fd306900` alignment block in `sample_img2img` brings back **231 vs 232** (or similar) broadcast errors whenever `init_latent.shape[-1] != p.width//8`.
 
 ---
 
 ## 7. Before vs After — Side-by-Side at Key Points
 
-Every “before” snippet is from `278fd71238a10da6a8b55e5b08a657c0ce97fc20`. “After” is from `24aefab9`.
+Every “before” snippet is from `278fd71238a10da6a8b55e5b08a657c0ce97fc20`. Integration snippets labeled `24aefab9`; Noise Inversion noise alignment is `fd306900`.
 
 ### 7-1. Latent canvas size (`abstractdiffusion.py`)
 
@@ -392,11 +443,47 @@ if (H, W) != (self.h, self.w):
 
 **After (`88d89476`+):** `downscale=False` on encode; pixel tile positions map 1:1 into the latent accumulation buffer.
 
+### 7-5. Noise Inversion `noise` / `x` vs `init_latent` (`abstractdiffusion.py` `sample_img2img`)
+
+**Before (`24aefab9` only — without `fd306900`):**
+
+```python
+def sample_img2img(self, sampler, p, x, noise, conditioning, ...):
+    # noise inverse sampling - renoise mask
+    renoise_mask = None
+    if self.noise_inverse_renoise_strength > 0:
+        ...
+        renoise_mask = F.interpolate(..., size=noise.shape[-2:], ...)
+    ...
+    inverse_noise = latent - (p.init_latent / sigmas[0])
+    combined_noise = ((1 - renoise_mask) * inverse_noise + renoise_mask * noise) / ...
+```
+
+`noise` enters at **floor** `(H//8, W//8)`; `inverse_noise` at **ceil** `init_latent` size → crash when width mod 8 ≠ 0.
+
+**After (`fd306900`):**
+
+```python
+def _align_latent_to_canvas(t, lh, lw):
+    # replicate last row/col when growing; crop when shrinking
+    ...
+
+def sample_img2img(self, sampler, p, x, noise, conditioning, ...):
+    _, _, _lh, _lw = p.init_latent.shape
+    if noise.shape[-2:] != (_lh, _lw):
+        noise = _align_latent_to_canvas(noise, _lh, _lw)
+    if x.shape[-2:] != (_lh, _lw):
+        x = _align_latent_to_canvas(x, _lh, _lw)
+    # then renoise_mask uses aligned noise.shape[-2:]
+```
+
+**Meaning:** Closes the last gap between A1111’s img2img noise allocation and Forge/MultiDiffusion’s ceil-width `init_latent`. Required for Noise Inversion after `24aefab9` canvas fixes.
+
 ---
 
 ## 8. Full Text of Modified Files (except new module)
 
-Below is the **complete unified diff** from baseline `278fd71238a10da6a8b55e5b08a657c0ce97fc20` to `24aefab9` for all changed paths except `modules/forge_tiled_vae.py` (new file; see Appendix A).
+Below is the **complete unified diff** from baseline `278fd71238a10da6a8b55e5b08a657c0ce97fc20` to `24aefab9` for all changed paths except `modules/forge_tiled_vae.py` (new file; see Appendix A). The follow-up patch **`24aefab9` → `fd306900`** (`abstractdiffusion.py` only) is in **Appendix C**.
 
 ### 8-1. `modules/sd_models_xl.py`
 
@@ -431,6 +518,7 @@ See git diff in section 8-8 for line-accurate patch. Functionally added or repla
 - `_hint_pixel_size_from_x_spatial`, `set_controlnet_tensors_for_size`, `_crop_controlnet_tile`
 - `switch_controlnet_tensors(..., tile_offset=0)` — slice pre-cached tiles per micro-batch
 - Noise Inversion: align canvas to `init_latent` shape before inversion loop; `[MD-DIAG]` prints
+- **`fd306900`:** `_align_latent_to_canvas()`; align `noise`/`x` to `p.init_latent` at start of `sample_img2img`
 
 ### 8-4. `multidiffusion.py` — new helpers and behavior (full text at `24aefab9`)
 
@@ -467,10 +555,16 @@ Unrelated to VAE: adds `/謝罪文/`.
 Run on the repo to get every changed line:
 
 ```bash
+# Main integration (through canvas + Forge VAE)
 git diff 278fd71238a10da6a8b55e5b08a657c0ce97fc20..24aefab9
+
+# Noise Inversion noise/x alignment only
+git diff 24aefab9..fd306900 -- extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
 ```
 
-Stat: **9 files, +1072 / −62 lines** (`forge_tiled_vae.py` is +768 of those).
+Stat through `24aefab9`: **9 files, +1072 / −62 lines** (`forge_tiled_vae.py` is +768 of those).
+
+Stat for `fd306900`: **1 file, +34 lines** (`_align_latent_to_canvas` + `sample_img2img` prologue). See Appendix C.
 
 ---
 
@@ -516,6 +610,18 @@ On the last tile along an axis, if `upscaled[d] + mask.shape[d+2] < out.shape[d+
 
 `tilevae.py` still reads MultiDiffusion Tiled VAE checkboxes and tile size sliders. Forge path uses those sizes (with VRAM caps) for `_encode_passes()` / `_decode_passes()` triple orientations. No new Gradio controls were added.
 
+### 9-8. Noise Inversion tensor size chain (`fd306900`)
+
+End-to-end for img2img + Forge tiled VAE + Noise Inversion:
+
+1. **Encode:** `forge_ldm_encode_first_stage` / tiled encode produces `p.init_latent` with spatial `(pixel_to_latent_h(H), pixel_to_latent_w(W))`.
+2. **Canvas:** `AbstractDiffusion.__init__` uses the same `pixel_to_latent_*` for `self.h`, `self.w`; `_rebuild_latent_canvas` may resize buffers if a later tensor differs.
+3. **Sampler entry:** A1111 still allocates `noise` and `x` with `create_random_tensors(..., (C, H//8, W//8))` — **floor** on both axes.
+4. **Noise Inversion hook:** `sample_img2img` runs inversion → `inverse_noise` on `init_latent` grid.
+5. **Blend:** `renoise_mask` is sized to `noise`; without `fd306900`, step 3 and steps 4–5 disagree when `pixel_to_latent_w(W) != W//8`.
+
+The fix only touches step 3’s tensors **inside** the tiled-diffusion hook, immediately before mask construction. It does not change global `processing.py` or Forge VAE.
+
 ---
 
 ## Appendix A — Full source: `modules/forge_tiled_vae.py` at `24aefab9`
@@ -527,7 +633,7 @@ git show 24aefab9:modules/forge_tiled_vae.py
 ```
 
 
-`python
+```python
 """
 Forge (ComfyUI-style) tiled VAE — ported from Forge backend/patcher/vae.py.
 
@@ -1936,4 +2042,76 @@ index 227ea520..e1e073f7 100644
  def encode_embedding_init_text(self: sgm.modules.GeneralConditioner, init_text, nvpt):
      res = []
 
-`
+```
+
+---
+
+## Appendix C — Diff `24aefab9` → `fd306900` (`abstractdiffusion.py` only)
+
+Commit: `fd306900` — fix(tiled-diffusion): align noise/x to init_latent canvas in Noise Inversion.
+
+Reproduce:
+
+```bash
+git show fd306900:extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
+git diff 24aefab9..fd306900 -- extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
+```
+
+Full patch:
+
+```diff
+diff --git a/extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py b/extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
+index 0eb044f3..0b7cf80f 100644
+--- a/extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
++++ b/extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
+@@ -1,6 +1,28 @@
+ from tile_utils.utils import *
+ 
+ 
++def _align_latent_to_canvas(t: Tensor, lh: int, lw: int) -> Tensor:
++    """Resize a latent tensor `t` (shape [..., H, W]) to (lh, lw) by edge-row/col replication
++    when growing, or center-crop when shrinking. Designed for the ceil/floor mismatch between
++    A1111's floor(width/8) noise tensors and Forge tiled VAE's ceil-rounded init_latent.
++    No statistical drift: replicated rows/cols come from the existing noise distribution."""
++    h_old, w_old = t.shape[-2], t.shape[-1]
++    if (h_old, w_old) == (lh, lw):
++        return t
++    # crop if larger
++    h_take = min(h_old, lh)
++    w_take = min(w_old, lw)
++    out = torch.empty(*t.shape[:-2], lh, lw, dtype=t.dtype, device=t.device)
++    out[..., :h_take, :w_take] = t[..., :h_take, :w_take]
++    # pad with last column (right side) by replication
++    if lw > w_old:
++        out[..., :h_take, w_old:lw] = t[..., :h_take, w_old - 1:w_old]
++    # pad with last row (bottom side) by replication, including newly-filled right columns
++    if lh > h_old:
++        out[..., h_old:lh, :] = out[..., h_old - 1:h_old, :]
++    return out
++
++
+ class AbstractDiffusion:
+ 
+     def __init__(self, p: Processing, sampler: Sampler):
+@@ -714,6 +736,18 @@ class AbstractDiffusion:
+     def sample_img2img(self, sampler: KDiffusionSampler, p:ProcessingImg2Img, 
+                        x:Tensor, noise:Tensor, conditioning, unconditional_conditioning,
+                        steps=None, image_conditioning=None):
++        # Forge-compat: A1111 builds `x`/`noise` from floor(W/8, H/8) via create_random_tensors,
++        # but Forge tiled VAE encode can produce a ceil-rounded `init_latent` (e.g. 1853x1254 ->
++        # latent 232x157 instead of 231x156). _rebuild_latent_canvas later realigns
++        # self.h/self.w to init_latent, but the `noise` / `x` arguments are still old-sized,
++        # causing the renoise_mask broadcast at line ~782 to fail with a (231 vs 232) mismatch.
++        # Align them to init_latent canvas here by replicating the last row/col (no statistical drift).
++        _, _, _lh, _lw = p.init_latent.shape
++        if noise.shape[-2:] != (_lh, _lw):
++            noise = _align_latent_to_canvas(noise, _lh, _lw)
++        if x.shape[-2:] != (_lh, _lw):
++            x = _align_latent_to_canvas(x, _lh, _lw)
++
+         # noise inverse sampling - renoise mask
+         import torch.nn.functional as F
+         renoise_mask = None
+```
+
+**Document revision:** 2026-06-26 — includes `fd306900` (Noise Inversion broadcast fix). Baseline remains `278fd712`; integration through `24aefab9`; current tip `fd306900`.
