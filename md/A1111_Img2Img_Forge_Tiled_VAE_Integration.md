@@ -10,7 +10,7 @@ All “before” behavior in this document is taken from:
 
 | Role | Commit | Message |
 |------|--------|---------|
-| **Baseline (前回)** | `278fd71238a10da6a8b55e5b08a657c0ce97fc20` | Update README.md |
+| **Baseline (previous)** | `278fd71238a10da6a8b55e5b08a657c0ce97fc20` | Update README.md |
 | Integration tip (canvas + VAE) | `24aefab9` | fix: MultiDiffusion latent canvas alignment and Forge VAE tile NaN |
 | **Current tip (includes Noise Inversion broadcast fix)** | `fd306900` | fix(tiled-diffusion): align noise/x to init_latent canvas in Noise Inversion |
 
@@ -548,7 +548,7 @@ Both gain a branch for ControlNet hints in **pixel space** `(self.h * 8, self.w 
 
 ### 8-7. `.gitignore`
 
-Unrelated to VAE: adds `/謝罪文/`.
+Unrelated to VAE: adds a `.gitignore` entry for a local documentation folder.
 
 ### 8-8. Complete diff command output
 
@@ -1419,7 +1419,7 @@ index 6f4380d2..5051136c 100644
  /test_scipy2.whl
  /my test/
  /scratch/
-+/謝罪文/
++/<local-apology-markdown>/
 diff --git a/extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py b/extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py
 index 0cc459ef..dc6dc194 100644
 --- a/extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py
