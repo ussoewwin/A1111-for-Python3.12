@@ -1,6 +1,28 @@
 from tile_utils.utils import *
 
 
+def _align_latent_to_canvas(t: Tensor, lh: int, lw: int) -> Tensor:
+    """Resize a latent tensor `t` (shape [..., H, W]) to (lh, lw) by edge-row/col replication
+    when growing, or center-crop when shrinking. Designed for the ceil/floor mismatch between
+    A1111's floor(width/8) noise tensors and Forge tiled VAE's ceil-rounded init_latent.
+    No statistical drift: replicated rows/cols come from the existing noise distribution."""
+    h_old, w_old = t.shape[-2], t.shape[-1]
+    if (h_old, w_old) == (lh, lw):
+        return t
+    # crop if larger
+    h_take = min(h_old, lh)
+    w_take = min(w_old, lw)
+    out = torch.empty(*t.shape[:-2], lh, lw, dtype=t.dtype, device=t.device)
+    out[..., :h_take, :w_take] = t[..., :h_take, :w_take]
+    # pad with last column (right side) by replication
+    if lw > w_old:
+        out[..., :h_take, w_old:lw] = t[..., :h_take, w_old - 1:w_old]
+    # pad with last row (bottom side) by replication, including newly-filled right columns
+    if lh > h_old:
+        out[..., h_old:lh, :] = out[..., h_old - 1:h_old, :]
+    return out
+
+
 class AbstractDiffusion:
 
     def __init__(self, p: Processing, sampler: Sampler):
@@ -714,6 +736,18 @@ class AbstractDiffusion:
     def sample_img2img(self, sampler: KDiffusionSampler, p:ProcessingImg2Img, 
                        x:Tensor, noise:Tensor, conditioning, unconditional_conditioning,
                        steps=None, image_conditioning=None):
+        # Forge-compat: A1111 builds `x`/`noise` from floor(W/8, H/8) via create_random_tensors,
+        # but Forge tiled VAE encode can produce a ceil-rounded `init_latent` (e.g. 1853x1254 ->
+        # latent 232x157 instead of 231x156). _rebuild_latent_canvas later realigns
+        # self.h/self.w to init_latent, but the `noise` / `x` arguments are still old-sized,
+        # causing the renoise_mask broadcast at line ~782 to fail with a (231 vs 232) mismatch.
+        # Align them to init_latent canvas here by replicating the last row/col (no statistical drift).
+        _, _, _lh, _lw = p.init_latent.shape
+        if noise.shape[-2:] != (_lh, _lw):
+            noise = _align_latent_to_canvas(noise, _lh, _lw)
+        if x.shape[-2:] != (_lh, _lw):
+            x = _align_latent_to_canvas(x, _lh, _lw)
+
         # noise inverse sampling - renoise mask
         import torch.nn.functional as F
         renoise_mask = None
