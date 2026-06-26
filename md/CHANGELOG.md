@@ -1,6 +1,19 @@
-# Release Notes (v1.01 to v2.2)
+# Release Notes (v1.01 to v2.3)
 
-This document contains release notes for versions v1.01 through v2.2 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.3 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.3
+
+- **Added**: **Forge-parity tiled VAE encode/decode** — new `modules/forge_tiled_vae.py` patches SDXL `DiffusionEngine` and SD1.5/2.x `LatentDiffusion` `encode_first_stage` / `decode_first_stage` with Forge-style 3-pass tiled processing and a progress bar. When MultiDiffusion Tiled VAE is enabled in the UI, legacy `VAEHook` in `tilevae.py` is bypassed in favor of the Forge path (`modules/sd_models_xl.py` applies the patch on SDXL load).
+- **Fixed**: **img2img bookend VRAM spikes** — full-resolution VAE encode at the start and decode at the end of img2img (MultiDiffusion + ControlNet tile + Noise Inversion) no longer run as monolithic full-res passes; tiled bookends cap per-tile VRAM on ~16GB GPUs.
+- **Fixed**: **Forge tiled encode scale** — encode tile blending no longer uses `downscale=True`, which mis-mapped pixel→latent coordinates and shifted H/W relative to the MultiDiffusion latent canvas (`88d89476`).
+- **Fixed**: **Noise Inversion / ControlNet hint sizing** — `abstractdiffusion.py` and `multidiffusion.py` align the latent canvas and ControlNet hints to the input latent size for Noise Inversion (`88d89476`).
+- **Fixed**: **MultiDiffusion latent canvas alignment** — asymmetric `pixel_to_latent_h` (floor) / `pixel_to_latent_w` (ceil) replace uniform `// 8` sizing; canvas is rebuilt from the input latent when shapes differ; removed `org_func` full-UNet fallback on size mismatch that caused VRAM explosions (`24aefab9`).
+- **Fixed**: **Forge VAE edge-tile NaN** — edge tiles in tiled encode/decode no longer produce NaNs when latent width is not a multiple of 8 (`24aefab9`).
+- **Summary**: img2img 16GB VRAM stability — Forge Tiled VAE bookends + MultiDiffusion tiled UNet integration without UI setting changes; technical write-up in `md/A1111_Img2Img_Forge_Tiled_VAE_Integration.md`.
+- **Release Note**: [v2.3 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3)
 
 ---
 
