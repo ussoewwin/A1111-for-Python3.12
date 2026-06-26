@@ -12,7 +12,9 @@ This document contains release notes for versions v1.01 through v2.3 of `ussoeww
 - **Fixed**: **Noise Inversion / ControlNet hint sizing** — `abstractdiffusion.py` and `multidiffusion.py` align the latent canvas and ControlNet hints to the input latent size for Noise Inversion (`88d89476`).
 - **Fixed**: **MultiDiffusion latent canvas alignment** — asymmetric `pixel_to_latent_h` (floor) / `pixel_to_latent_w` (ceil) replace uniform `// 8` sizing; canvas is rebuilt from the input latent when shapes differ; removed `org_func` full-UNet fallback on size mismatch that caused VRAM explosions (`24aefab9`).
 - **Fixed**: **Forge VAE edge-tile NaN** — edge tiles in tiled encode/decode no longer produce NaNs when latent width is not a multiple of 8 (`24aefab9`).
-- **Summary**: img2img 16GB VRAM stability — Forge Tiled VAE bookends + MultiDiffusion tiled UNet integration without UI setting changes; technical write-up in `md/A1111_Img2Img_Forge_Tiled_VAE_Integration.md`.
+- **Fixed**: **Noise Inversion noise/x canvas alignment** — `sample_img2img` aligns `noise` and `x` to `p.init_latent` shape before `renoise_mask` setup, fixing `RuntimeError: The size of tensor a (231) must match the size of tensor b (232)` when Forge tiled VAE uses ceil for latent width (`fd306900`).
+- **Summary**: img2img 16GB VRAM stability — Forge Tiled VAE bookends + MultiDiffusion tiled UNet integration without UI setting changes.
+- **Technical details**: Refer here for the full technical write-up: [A1111 Img2Img Forge Tiled VAE Integration](md/A1111_Img2Img_Forge_Tiled_VAE_Integration.md).
 - **Release Note**: [v2.3 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3)
 
 ---
