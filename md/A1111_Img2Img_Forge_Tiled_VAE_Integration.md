@@ -330,7 +330,6 @@ All fixes are **code-only**. The user's existing UI stack was preserved.
 ## 4. Changed Files
 
 ```
- .gitignore                                         |   1 +
  extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py                             |   66 +-
  extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py              |  152 +++-
  extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/demofusion.py                     |   17 +-
@@ -339,7 +338,7 @@ All fixes are **code-only**. The user's existing UI stack was preserved.
  extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_utils/utils.py                            |   10 +
  modules/forge_tiled_vae.py                         | 768 +++++++++++++++++++++
  modules/sd_models_xl.py                            |   4 +-
- 9 files changed, 1072 insertions(+), 62 deletions(-)
+ 8 files changed, 1071 insertions(+), 62 deletions(-)
 ```
 
 ---
@@ -510,7 +509,7 @@ def pixel_to_latent_w(px: int) -> int:
 
 ### 8-3. `abstractdiffusion.py` — new / changed methods (full text at `24aefab9`)
 
-See git diff in section 8-8 for line-accurate patch. Functionally added or replaced:
+See git diff in section 8-7 for line-accurate patch. Functionally added or replaced:
 
 - Canvas init: `pixel_to_latent_w` / `pixel_to_latent_h`
 - `_rebuild_latent_canvas(h, w)` — reallocates `weights`, grid bboxes, scales custom bboxes
@@ -546,11 +545,7 @@ When Tiled VAE is enabled in UI:
 
 Both gain a branch for ControlNet hints in **pixel space** `(self.h * 8, self.w * 8)` with bbox slicing `bbox.y * 8` … — same convention as MultiDiffusion after `88d89476`.
 
-### 8-7. `.gitignore`
-
-Unrelated to VAE: adds a `.gitignore` entry for a local documentation folder.
-
-### 8-8. Complete diff command output
+### 8-7. Complete diff command output
 
 Run on the repo to get every changed line:
 
@@ -562,7 +557,7 @@ git diff 278fd71238a10da6a8b55e5b08a657c0ce97fc20..24aefab9
 git diff 24aefab9..fd306900 -- extensions-builtin/multidiffusion-upscaler-for-automatic1111/tile_methods/abstractdiffusion.py
 ```
 
-Stat through `24aefab9`: **9 files, +1072 / −62 lines** (`forge_tiled_vae.py` is +768 of those).
+Stat through `24aefab9`: **8 files, +1071 / −62 lines** (`forge_tiled_vae.py` is +768 of those).
 
 Stat for `fd306900`: **1 file, +34 lines** (`_align_latent_to_canvas` + `sample_img2img` prologue). See Appendix C.
 
@@ -1410,16 +1405,7 @@ def apply_all_vae_patches() -> None:
 
 ## Appendix B — Full unified diff (278fd712 → 24aefab9, extension + hook files)
 
-`diff
-diff --git a/.gitignore b/.gitignore
-index 6f4380d2..5051136c 100644
---- a/.gitignore
-+++ b/.gitignore
-@@ -51,3 +51,4 @@ trace.json
- /test_scipy2.whl
- /my test/
- /scratch/
-+/<local-apology-markdown>/
+```
 diff --git a/extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py b/extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py
 index 0cc459ef..dc6dc194 100644
 --- a/extensions-builtin/multidiffusion-upscaler-for-automatic1111/scripts/tilevae.py
