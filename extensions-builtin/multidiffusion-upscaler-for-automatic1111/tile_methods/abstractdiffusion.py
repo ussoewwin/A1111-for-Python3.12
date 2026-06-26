@@ -228,7 +228,51 @@ class AbstractDiffusion:
                 if bbox.feather_mask is not None:
                     bbox.feather_mask = feather_mask(bbox.w, bbox.h, bbox.feather_ratio)
         print(f'[Tiled Diffusion] Realign latent canvas {old_h}x{old_w} -> {self.h}x{self.w}')
+        # batched_bboxes / custom_bboxes have changed; rebuild the per-tile ControlNet
+        # cache so switch_controlnet_tensors does not IndexError when the new grid has
+        # more batches than the cache built at init_controlnet time.
+        self._rebuild_controlnet_tile_cache()
         return True
+
+    def _rebuild_controlnet_tile_cache(self) -> None:
+        """Rebuild control_tensor_batch / control_tensor_custom for the current
+        batched_bboxes / custom_bboxes, using org_control_tensor_batch (preserved
+        full-resolution hint from init_controlnet) as the source of truth.
+
+        Required when _rebuild_latent_canvas changes the tile grid (e.g. Forge
+        tiled encode returns a ceil-rounded latent that is one row/col larger
+        than the UI canvas). Without this, switch_controlnet_tensors indexes
+        past the original control_tensor_batch length and raises IndexError."""
+        if not getattr(self, 'enable_controlnet', False):
+            return
+        org_tensors = getattr(self, 'org_control_tensor_batch', None)
+        if not org_tensors:
+            return
+        self.control_tensor_batch = []
+        # control_tensor_custom is a per-param list of per-bbox tile lists; reset
+        # only when we actually rebuild, so init_controlnet's empty list survives
+        # the no-ControlNet case.
+        self.control_tensor_custom = []
+        for i in range(len(org_tensors)):
+            control_tile_list = []
+            control_tensor = org_tensors[i]
+            for bboxes in self.batched_bboxes:
+                single_batch_tensors = []
+                for bbox in bboxes:
+                    single_batch_tensors.append(self._crop_controlnet_tile(control_tensor, bbox))
+                control_tile = torch.cat(single_batch_tensors, dim=0)
+                if self.control_tensor_cpu:
+                    control_tile = control_tile.cpu()
+                control_tile_list.append(control_tile)
+            self.control_tensor_batch.append(control_tile_list)
+            if len(self.custom_bboxes) > 0:
+                custom_control_tile_list = []
+                for bbox in self.custom_bboxes:
+                    control_tile = self._crop_controlnet_tile(control_tensor, bbox)
+                    if self.control_tensor_cpu:
+                        control_tile = control_tile.cpu()
+                    custom_control_tile_list.append(control_tile)
+                self.control_tensor_custom.append(custom_control_tile_list)
 
     @grid_bbox
     def init_grid_bbox(self, tile_w:int, tile_h:int, overlap:int, tile_bs:int):
