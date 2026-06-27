@@ -7,7 +7,8 @@ This document contains release notes for versions v1.01 through v2.3.1 of `ussoe
 ## v2.3.1
 
 - **Fixed**: **ControlNet per-tile cache after latent canvas rebuild** — when MultiDiffusion realigns the latent canvas (e.g. Forge tiled VAE encode `240×252` → `241×252`), `batched_bboxes` is recalculated but `control_tensor_batch` was still sized for the init-time tile count. Noise Inversion + ControlNet tile then crashed at step 0 with `IndexError: list index out of range` in `switch_controlnet_tensors`. `_rebuild_latent_canvas()` now calls `_rebuild_controlnet_tile_cache()` to rebuild per-tile hints from `org_control_tensor_batch` (`1cf51f90`).
-- **Summary**: img2img MultiDiffusion + ControlNet tile + Noise Inversion — fix stale ControlNet tile cache after canvas realign.
+- **Fixed**: **Forge tiled VAE encode NaN / narrow crash** — VAE encoder returns `floor(H/8)` latent rows but `tiled_scale` buffers use `round(H/8)`. On pass[1] wide tiles (e.g. `1024×256` with image `H=966`) end-align left row 0 as `out_div==0` → NaN; padding the encoder input overshot when `floor==round` (e.g. `H=954`) and crashed `narrow`. Last-tile output is now replicate-padded at the trailing edge in `tiled_scale_multidim` (`1e2f758a`).
+- **Summary**: img2img MultiDiffusion + ControlNet tile + Noise Inversion — ControlNet tile cache after canvas realign; Forge tiled VAE encode NaN fix.
 - **Release Note**: [v2.3.1 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3.1)
 
 ---
