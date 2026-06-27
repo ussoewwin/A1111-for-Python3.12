@@ -867,8 +867,6 @@ forge_tiled_vae.apply_all_vae_patches()
 
 **Meaning:** Patches `DiffusionEngine` and `LatentDiffusion` at import so Forge tiled VAE applies when UI enables Tiled VAE.
 
-Why this timing matters: A1111 can call `encode_first_stage` before any extension `process()` hook runs. If we patched lazily inside `tilevae.py`, the very first img2img encode could still run at full resolution and OOM. Patching at import guarantees the tiled path is active from the first pixel that enters the VAE.
-
 ---
 
 ### 4-3. `tile_utils/utils.py` (added functions)
@@ -885,8 +883,6 @@ def pixel_to_latent_w(px: int) -> int:
 ```
 
 **Meaning:** Canvas `self.h`/`self.w` match VAE latent geometry. Width ceil fixes 2325→291.
-
-Height uses floor because SD VAE rounds the vertical axis down. Width uses ceil because the VAE’s convolution/padding combination carries the leftover rightmost pixel column into an extra latent column. If the canvas used floor for width, MultiDiffusion would build a grid one column narrower than the encoded latent, and every tile index would drift.
 
 ---
 
@@ -997,12 +993,6 @@ Postprocess clears Forge flag or restores VAEHook originals:
 
 **Meaning:** Large images cap encoder tile size (192/256/512). If Forge patch applies to SD1.5/2.x or SDXL, set Forge tile sizes and `VAE_ALWAYS_TILED=True`, then **return without VAEHook**. Postprocess clears always-tiled flag or unhooks legacy VAEHook.
 
-When Tiled VAE is disabled we must restore the original VAE behavior. If the Forge flag stayed on, even ordinary full-resolution encodes would be tiled and lose quality. If the legacy VAEHook stayed attached, the encoder/decoder `forward` methods would still be wrapped and could conflict with the next img2img run.
-
-The pixel-count caps exist because encoder tile size is the dominant VRAM knob for the VAE bookend. A 192 px encoder tile on a 6 Mpx image keeps intermediate activation maps small enough for 16 GB; 512 px is faster but only safe on smaller images. The decoder is capped at 256 px because decode activation maps are larger than encode maps (more channels in early decoder layers).
-
-We skip VAEHook in the Forge path because VAEHook wraps `encoder.forward` / `decoder.forward`, while the Forge patch wraps `encode_first_stage` / `decode_first_stage`. Keeping both active would double-tile or create unexpected passthroughs. The Forge patch is the one that implements the 3-pass overlap and CPU accumulation we need, so VAEHook is the one we drop.
-
 ---
 
 ### 4-5. `tile_methods/abstractdiffusion.py`
@@ -1078,10 +1068,6 @@ def _align_latent_to_canvas(t: Tensor, lh: int, lw: int) -> Tensor:
 ```
 
 **Meaning:** When `init_latent` size differs from UI canvas, rebuild weights and tile grid; rescale custom bboxes proportionally.
-
-The original `AbstractDiffusion` computed its canvas once from the UI width/height and never changed it. Forge tiled encode can return a latent whose width is one column larger (ceil rounding) or, in rare edge cases, one row smaller. If the tile grid is not rebuilt to match the actual latent, `sample_one_step` either falls back to `org_func` or indexes tiles outside the grid.
-
-`_rebuild_latent_canvas` recomputes `split_bboxes` and the Gaussian/linear weight tensor for the new size. For custom bboxes it preserves the user’s intended region by scaling each bbox proportionally; clamping prevents bboxes from extending past the new canvas. The `feather_mask` is regenerated because the mask size depends on the new bbox dimensions.
 
 #### `init_grid_bbox` (stores config for rebuild)
 
@@ -1252,12 +1238,6 @@ The original `AbstractDiffusion` computed its canvas once from the UI width/heig
 
 **Meaning:** Align noise before renoise mask; after inversion setup, rebuild canvas to encoded latent size and refresh ControlNet hints.
 
-`_align_latent_to_canvas` is intentionally not a generic resize. Resizing a noise tensor with interpolation or with newly sampled values would change its mean and standard deviation, and Noise Inversion assumes the renoise mask operates on a noise tensor that is statistically identical to the original. Replicating the last row/column keeps the distribution unchanged while adding the single row or column needed to match `init_latent`.
-
-The rebuild after `x = self.p.init_latent` is required because `init_latent` is the ground-truth spatial size for the rest of the pipeline. If the canvas computed from the UI width does not match, every subsequent tile index is wrong. Refreshing ControlNet hints after the rebuild ensures the hints are cropped to the same latent size, not the old canvas size.
-
-The diagnostic log prints min/max/absmax and NaN/Inf flags immediately after the latent is fixed. This is the earliest point where a bad encode (NaN from VAE edge misalignment) can be detected before UNet consumes it.
-
 ---
 
 ### 4-6. `tile_methods/multidiffusion.py`
@@ -1411,16 +1391,6 @@ DDIM / timestep path (`ddim_forward`):
 
 **Meaning:** Never fall back to full UNet; tile one at a time with ControlNet; log NaN source hints.
 
-The `org_func` fallback existed because the original code assumed the input latent size always matched the canvas. With Forge tiled encode that assumption breaks. `_rebuild_latent_canvas` removes the size-mismatch condition, so `sample_one_step` can always take the tiled path.
-
-`repeat_func` processes one tile per forward when ControlNet is enabled because ControlNet adds its own UNet-sized feature maps to every forward pass. Batching multiple tiles multiplies those maps by the batch size and is the dominant cause of OOM on 16 GB. The kdiff and ddim variants differ only in how the timestep/sigma is passed; both build a per-tile cond dict with `_slice_icond_for_bboxes`.
-
-`_slice_icond_for_bboxes` is the central geometry switch: if the condition image is already latent-sized it is sliced with the latent `bbox.slicer`; if it is pixel-sized it is sliced with `_pixel_slicer` (coordinates multiplied by 8); otherwise it is repeated as a dummy. This keeps every tile’s `icond` spatially aligned with the latent tile that the UNet sees.
-
-The micro-batch planner enforces `[1] * tb` when ControlNet is on, and groups tiles when it is off. Grouping is faster because it amortizes Python overhead and CUDA kernel launch, but it is only safe when extra ControlNet feature maps are not present.
-
-The NaN diagnostic is placed after the weighted blend. If the blend divides by zero weights, or if a single tile produced NaN, the log prints whether the buffer and weights were already corrupted, which narrows whether the bug is in VAE edge alignment or in the UNet/ControlNet forward.
-
 ---
 
 ### 4-7. `tile_methods/demofusion.py` (`repeat_cond_dict` — icond handling)
@@ -1454,8 +1424,6 @@ Inside `repeat_cond_dict`, after `icond = self.get_icond(cond_in)`:
 ```
 
 **Meaning:** DemoFusion batches tiles with `repeat_cond_dict`. Latent masks use `bbox.slicer` (or stride subsampling in scale mode). **New:** when ControlNet hint is full pixel resolution `(h*8, w*8)`, slice each tile with `bbox.y/x * 8` in pixel space — same geometry as MultiDiffusion, with jitter padding preserved for mode 0.
-
-DemoFusion is a separate tiled sampling algorithm from MultiDiffusion, but the condition-image handling must obey the same spatial rule. In mode 0 the tile positions are jittered for diversity, so the hint is padded by the jitter range before slicing; the pixel branch applies the same padding and then slices with `bbox.y * 8` and `bbox.x * 8`. In scale mode the hint is subsampled by `current_scale_num` instead of contiguous slicing. The fallback `repeat_tensor` branch covers txt2img-style dummy conditions that have no spatial extent.
 
 ---
 
@@ -1497,20 +1465,18 @@ Custom bbox region — noise-inversion branch when `noise_inverse_step >= 0`:
 
 **Meaning:** Mixture-of-Diffusers batches tiles differently from MultiDiffusion, but the same rule applies: latent hints use `bbox.slicer`; full-pixel hints (`h*8`, `w*8`) are cropped in pixel space with `bbox.y/x * 8` so each tile’s `icond` matches its latent footprint.
 
-Mixture-of-Diffusers builds its own grid and custom-bbox loops. The grid branch iterates `batched_bboxes` and concatenates per-tile conditions; the custom branch handles Noise Inversion by reconstructing the per-bbox text condition at `noise_inverse_step`. Both branches need the same latent/pixel condition split: if a ControlNet preprocessor returned a full-resolution pixel hint, slicing it in latent space would give a 1/64 area crop instead of the correct 1/1 crop. Multiplying by 8 before slicing preserves the one-to-one correspondence between latent tile and its pixel-space condition.
-
 ---
 
 ## 5. Meaning of the integration (how the pieces connect)
 
-1. **Startup:** `sd_models_xl.py` patches VAE entry points on SDXL `DiffusionEngine` and SD1.5 `LatentDiffusion`. The patch must be installed at import time because A1111 can call `encode_first_stage` before any extension `process()` hook runs. A lazy patch would let the first full-resolution encode run and OOM.
-2. **User enables Tiled VAE:** `tilevae.py` sets Forge tile sizes from image pixels, sets `VAE_ALWAYS_TILED=True`, skips VAEHook. `VAE_ALWAYS_TILED` is the flag `forge_tiled_vae` checks inside the patched `encode_first_stage` / `decode_first_stage`; without it the patched methods short-circuit back to full resolution.
-3. **Encode:** `forge_tiled_vae.encode_pixels` runs 3-pass tiled encode with CPU accumulation; end-align fix prevents NaN on non-multiple-of-8 widths; returns latent at **ceil/floor** correct size. Three passes are needed because a single pass would show tile seams, and two passes still leaves uncovered cells at the right/bottom edge when the width or height is not a multiple of the tile stride. The third pass aligns the last tile to the canvas edge and fills those cells.
-4. **Canvas:** `AbstractDiffusion` initializes with `pixel_to_latent_*`; if `init_latent` differs, `_rebuild_latent_canvas` resizes tile grid and weights. The canvas is the master coordinate system for every tile operation, including ControlNet cropping and noise blending. A one-column mismatch propagates through the entire pipeline.
-5. **ControlNet:** Hints cropped to `init_latent` spatial size × 8; per-tile crops use `_crop_controlnet_tile` with interpolate fallback. ControlNet models consume pixel-space hints, so the hint must match the latent tile footprint times the VAE downscale factor. If the preprocessor returned a smaller or larger hint, bilinear interpolation rescales it to the exact tile size.
-6. **UNet steps:** `multidiffusion.sample_one_step` never calls `org_func` on mismatch; processes **one tile per forward** when ControlNet enabled. `org_func` is the full UNet; calling it defeats the purpose of tiling. One-tile-per-forward is the price of running ControlNet on 16 GB, because ControlNet feature maps scale linearly with batch size.
-7. **Noise Inversion:** `_align_latent_to_canvas` on `noise`/`x` before renoise mask so sizes match `init_latent`. Noise Inversion assumes the noise tensor and the latent being inverted have the same spatial dimensions. Edge replication preserves the noise distribution; interpolation or new random values would break the inversion assumption.
-8. **Decode:** Same Forge 3-pass tiled decode path; postprocess clears `VAE_ALWAYS_TILED`. The decode stage has the same VRAM peak risk as encode and uses the same 3-pass overlap strategy. Clearing the flag prevents subsequent non-tiled operations from being forced through the tile path.
+1. **Startup:** `sd_models_xl.py` patches VAE entry points on SDXL `DiffusionEngine` and SD1.5 `LatentDiffusion`.
+2. **User enables Tiled VAE:** `tilevae.py` sets Forge tile sizes from image pixels, sets `VAE_ALWAYS_TILED=True`, skips VAEHook.
+3. **Encode:** `forge_tiled_vae.encode_pixels` runs 3-pass tiled encode with CPU accumulation; end-align fix prevents NaN on non-multiple-of-8 widths; returns latent at **ceil/floor** correct size.
+4. **Canvas:** `AbstractDiffusion` initializes with `pixel_to_latent_*`; if `init_latent` differs, `_rebuild_latent_canvas` resizes tile grid and weights.
+5. **ControlNet:** Hints cropped to `init_latent` spatial size × 8; per-tile crops use `_crop_controlnet_tile` with interpolate fallback.
+6. **UNet steps:** `multidiffusion.sample_one_step` never calls `org_func` on mismatch; processes **one tile per forward** when ControlNet enabled.
+7. **Noise Inversion:** `_align_latent_to_canvas` on `noise`/`x` before renoise mask so sizes match `init_latent`.
+8. **Decode:** Same Forge 3-pass tiled decode path; postprocess clears `VAE_ALWAYS_TILED`.
 
 ---
 
