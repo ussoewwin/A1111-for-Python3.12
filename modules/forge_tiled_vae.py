@@ -246,14 +246,28 @@ def tiled_scale_multidim(
                 last_axis.append(pos + length >= s.shape[d + 2])
 
             ps = function(s_in).to(output_device)
-            mask = torch.ones_like(ps)
 
-            # End-align the last tile when VAE floor() leaves the output edge
-            # uncovered (e.g. pixel width 2325 -> latent 291: last tile fills
-            # 286-289 only, index 290 stays out_div==0 -> 0/0 = NaN).
-            for d in range(dims):
-                if last_axis[d] and upscaled[d] + mask.shape[d + 2] < out.shape[d + 2]:
-                    upscaled[d] = max(0, out.shape[d + 2] - mask.shape[d + 2])
+            # Replicate-pad the trailing edge when the last tile's output is
+            # smaller than the buffer slot. VAE returns floor(N/8) but the
+            # buffer is sized round(N/8); for tiles whose last_axis fills to
+            # the image edge, this leaves a 1-row/col gap (out_div==0 -> NaN).
+            # Padding (not shifting via end-align) keeps the leading row
+            # covered, which matters when a single tile spans the full axis
+            # (e.g. pass[1] tile_y=1024 with image H=966): shifting would
+            # leave row 0 as 0/0=NaN. F.pad expects (left_lastdim, right_lastdim,
+            # ..., left_firstdim, right_firstdim), so build from the last spatial
+            # dim backward.
+            pad_amounts = []
+            for d in range(dims - 1, -1, -1):
+                if last_axis[d]:
+                    gap = out.shape[d + 2] - (upscaled[d] + ps.shape[d + 2])
+                    pad_amounts.extend([0, max(0, gap)])
+                else:
+                    pad_amounts.extend([0, 0])
+            if any(p > 0 for p in pad_amounts):
+                ps = torch.nn.functional.pad(ps, pad_amounts, mode="replicate")
+
+            mask = torch.ones_like(ps)
 
             for d in range(2, dims + 2):
                 feather = round(get_scale(d - 2, overlap[d - 2]))
@@ -494,18 +508,6 @@ def _encode_tiled(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tens
 
     def encode_fn(a):
         a = a.to(dtype=dtype, device=device)
-        # SD1.5/SDXL VAE encoder uses 3x asymmetric-padded stride-2 conv (pad=(0,1,0,1)).
-        # Inputs with H or W not divisible by 8 produce floor(N/8)-sized latent, but
-        # tiled_scale's output buffer is sized round(N/8). For a single tile spanning
-        # the full input axis (e.g. pass[1] tile_y=1024 with image H=966), the
-        # end-align branch shifts the (120-row) latent down by 1 row, leaving row 0
-        # as out_div==0 -> NaN. Pad to next multiple of 8 with edge replication so the
-        # VAE output matches the round-based buffer size.
-        _, _, ah, aw = a.shape
-        pad_h = (-ah) % 8
-        pad_w = (-aw) % 8
-        if pad_h or pad_w:
-            a = torch.nn.functional.pad(a, (0, pad_w, 0, pad_h), mode="replicate")
         try:
             return _vae_encode_latent_tensor(vae, a)
         finally:
