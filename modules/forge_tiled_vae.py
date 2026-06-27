@@ -494,6 +494,18 @@ def _encode_tiled(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tens
 
     def encode_fn(a):
         a = a.to(dtype=dtype, device=device)
+        # SD1.5/SDXL VAE encoder uses 3x asymmetric-padded stride-2 conv (pad=(0,1,0,1)).
+        # Inputs with H or W not divisible by 8 produce floor(N/8)-sized latent, but
+        # tiled_scale's output buffer is sized round(N/8). For a single tile spanning
+        # the full input axis (e.g. pass[1] tile_y=1024 with image H=966), the
+        # end-align branch shifts the (120-row) latent down by 1 row, leaving row 0
+        # as out_div==0 -> NaN. Pad to next multiple of 8 with edge replication so the
+        # VAE output matches the round-based buffer size.
+        _, _, ah, aw = a.shape
+        pad_h = (-ah) % 8
+        pad_w = (-aw) % 8
+        if pad_h or pad_w:
+            a = torch.nn.functional.pad(a, (0, pad_w, 0, pad_h), mode="replicate")
         try:
             return _vae_encode_latent_tensor(vae, a)
         finally:
