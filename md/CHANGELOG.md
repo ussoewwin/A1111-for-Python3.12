@@ -6,7 +6,7 @@ This document contains release notes for versions v1.01 through v2.3.2 of `ussoe
 
 ## v2.3.2
 
-- **Summary**: Documentation only — restored `md/A1111_Img2Img_Forge_Tiled_VAE_Integration.md` to the pre-v2.3.1 integration scope; added standalone Forge tiled VAE encode NaN fix write-up in `md/A1111_Forge_Tiled_VAE_Encode_NaN_Fix_Explained.md` (Fix B, code unchanged from v2.3.1 `1e2f758a`).
+- **Summary**: Documentation only — restored `md/A1111_Img2Img_Forge_Tiled_VAE_Integration.md` to the pre-v2.3.1 integration scope; added standalone Forge tiled VAE encode NaN fix write-up in `md/A1111_Forge_Tiled_VAE_Encode_NaN_Fix_Explained.md` (code unchanged from v2.3.1 commit `1e2f758a`).
 - **Release Note**: [v2.3.2 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3.2)
 
 ---

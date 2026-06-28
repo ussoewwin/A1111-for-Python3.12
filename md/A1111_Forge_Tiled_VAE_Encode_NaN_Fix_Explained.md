@@ -1,8 +1,6 @@
-# Forge Tiled VAE Encode — NaN / narrow Crash Fix (v2.3.1)
+# Forge Tiled VAE Encode — NaN / narrow Crash Fix (v2.3.2)
 
 **Repository:** `ussoewwin/A1111-for-Python3.12`  
-**Release:** v2.3.1  
-**Fix commit:** `1e2f758a` — `fix: replicate-pad last-tile ps trailing edge in tiled_scale (avoids end-align NaN and OOB narrow)`  
 **File:** `modules/forge_tiled_vae.py`  
 **Scope:** Forge 3-pass tiled **encode** only (`tiled_scale_multidim` + `encode_fn`). Does **not** cover ControlNet canvas rebuild (see separate doc for that).
 
@@ -128,9 +126,9 @@ The fix must pad the **VAE output tensor `ps`** to fill the buffer slot, not inf
 | Stage | Commit | State |
 |-------|--------|--------|
 | v2.3 shipped | `24aefab9` | Forge tiled VAE + **end-align** in `tiled_scale_multidim`. Multi-tile edge gaps fixed; **single-tile full-axis pass[1] still NaN**. |
-| v2.3.1 part A | `1cf51f90` | ControlNet tile cache rebuild after canvas realign. **No change** to VAE NaN logic. NaN still reproduced on 1086×954 img2img. |
-| v2.3.1 attempt B | `019e419d` | Replicate-pad **encoder input** in `encode_fn`. Fixed some H (966) but ** broke H=954** with narrow/size errors. End-align still present. |
-| v2.3.1 final B | `1e2f758a` | Remove encoder-input pad; remove end-align; **replicate-pad trailing edge of `ps`**. |
+| v2.3.1 — ControlNet cache (`1cf51f90`) | `1cf51f90` | ControlNet tile cache rebuild after canvas realign. **No change** to VAE NaN logic. NaN still reproduced on 1086×954 img2img. |
+| v2.3.1 — NaN attempt (`019e419d`) | `019e419d` | Replicate-pad **encoder input** in `encode_fn`. Fixed some H (966) but ** broke H=954** with narrow/size errors. End-align still present. |
+| v2.3.1 — NaN shipped (`1e2f758a`) | `1e2f758a` | Remove encoder-input pad; remove end-align; **replicate-pad trailing edge of `ps`**. |
 
 At **v2.3.1** (after `1cf51f90`, before `1e2f758a`), the code still had **end-align + encoder-input padding** — the worst combination for mixed image heights.
 
