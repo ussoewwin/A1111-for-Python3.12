@@ -421,12 +421,22 @@ def _log_decode_tile_grid(latent_samples: torch.Tensor) -> None:
     )
 
 
-def _vae_encode_latent_tensor(vae, x: torch.Tensor) -> torch.Tensor:
-    """VAE.encode -> BCHW latent mean (SD1.5 DiagonalGaussianDistribution or SDXL tensor)."""
+def _vae_encode_latent_tensor(
+    vae, x: torch.Tensor, *, diffusion_engine: bool = False
+) -> torch.Tensor:
+    """VAE.encode -> BCHW latent mean for tiled/full encode helpers.
+
+    diffusion_engine=False (SD 1.5 / 2.x LatentDiffusion via forge_ldm_encode_first_stage):
+        vae.encode always returns DiagonalGaussianDistribution — use .mode() only (unchanged).
+    diffusion_engine=True (SDXL DiffusionEngine via encode_pixels):
+        vae.encode may return a latent tensor (Forge/scaled path); never call Tensor.mode().
+    """
     encoded = vae.encode(x)
-    if hasattr(encoded, "mode"):
+    if diffusion_engine:
+        if isinstance(encoded, torch.Tensor):
+            return encoded.float()
         return encoded.mode().float()
-    return encoded.float()
+    return encoded.mode().float()
 
 
 def _posterior_from_latent_mode(z_mode: torch.Tensor):
@@ -494,7 +504,14 @@ def _forge_3pass_tiled(
     return acc / 3.0
 
 
-def _encode_tiled(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tensor:
+def _encode_tiled(
+    vae,
+    pixel_samples: torch.Tensor,
+    dtype,
+    device,
+    *,
+    diffusion_engine: bool = False,
+) -> torch.Tensor:
     orig_device = pixel_samples.device
     accum_device = _tiled_accum_device()
     if orig_device != accum_device:
@@ -509,7 +526,7 @@ def _encode_tiled(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tens
     def encode_fn(a):
         a = a.to(dtype=dtype, device=device)
         try:
-            return _vae_encode_latent_tensor(vae, a)
+            return _vae_encode_latent_tensor(vae, a, diffusion_engine=diffusion_engine)
         finally:
             devices.torch_gc()
 
@@ -579,7 +596,14 @@ def _decode_tiled(vae, latent_samples: torch.Tensor, dtype, device) -> torch.Ten
     return output.to(device=orig_device)
 
 
-def _encode_full(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tensor:
+def _encode_full(
+    vae,
+    pixel_samples: torch.Tensor,
+    dtype,
+    device,
+    *,
+    diffusion_engine: bool = False,
+) -> torch.Tensor:
     memory_used = MEMORY_USED_ENCODE(pixel_samples.shape[2], pixel_samples.shape[3], dtype)
     free = _get_free_memory(device)
     batch_number = max(1, int(free / max(1, memory_used)))
@@ -587,7 +611,7 @@ def _encode_full(vae, pixel_samples: torch.Tensor, dtype, device) -> torch.Tenso
     out = None
     for start in range(0, pixel_samples.shape[0], batch_number):
         chunk = pixel_samples[start : start + batch_number].to(dtype=dtype, device=device)
-        encoded = _vae_encode_latent_tensor(vae, chunk)
+        encoded = _vae_encode_latent_tensor(vae, chunk, diffusion_engine=diffusion_engine)
         if out is None:
             out = torch.empty(
                 (pixel_samples.shape[0],) + tuple(encoded.shape[1:]),
@@ -625,17 +649,23 @@ def encode_pixels(vae, pixel_samples: torch.Tensor) -> torch.Tensor:
     with _bypass_vae_hooks(vae):
         if VAE_ALWAYS_TILED:
             devices.torch_gc()
-            return _encode_tiled(vae, pixel_samples, dtype, device)
+            return _encode_tiled(
+                vae, pixel_samples, dtype, device, diffusion_engine=True
+            )
 
         try:
-            return _encode_full(vae, pixel_samples, dtype, device)
+            return _encode_full(
+                vae, pixel_samples, dtype, device, diffusion_engine=True
+            )
         except OOM_EXCEPTIONS:
             print(
                 "Warning: Encountered Out of Memory during VAE Encoding; "
                 "Retrying with Tiled VAE Encoding..."
             )
             devices.torch_gc()
-            return _encode_tiled(vae, pixel_samples, dtype, device)
+            return _encode_tiled(
+                vae, pixel_samples, dtype, device, diffusion_engine=True
+            )
 
 
 def decode_latent(vae, latent_samples: torch.Tensor) -> torch.Tensor:

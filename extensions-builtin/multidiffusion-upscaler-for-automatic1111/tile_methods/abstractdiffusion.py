@@ -942,6 +942,13 @@ class AbstractDiffusion:
             del x_in, sigma_in, c_out, c_in, t,
             del eps, denoised, d, dt
 
+            # Per-step allocator release: NoiseInv runs sample_one_step over
+            # every tile + ControlNet on the full latent, so without this the
+            # allocator keeps growing across NI steps and spills into shared
+            # GPU memory (RAM swap), turning each step into 100+ s.
+            if self.enable_controlnet and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             pbar.update(1)
         pbar.close()
 

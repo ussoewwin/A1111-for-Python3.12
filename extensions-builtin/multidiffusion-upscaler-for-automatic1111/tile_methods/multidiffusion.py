@@ -205,6 +205,12 @@ class MultiDiffusion(AbstractDiffusion):
                         self.switch_controlnet_tensors(batch_id, N, m, tile_offset=k)
                         outs.append(repeat_func(xt, bb))
                         k += m
+                        # ControlNet tile + per-tile UNet activations otherwise
+                        # accumulate in the caching allocator and spill into shared
+                        # GPU memory between tiles (NoiseInv path: 18 tiles serial,
+                        # 117s/it observed on 16GB SDXL ControlNet tile runs).
+                        if self.enable_controlnet and torch.cuda.is_available():
+                            torch.cuda.empty_cache()
                     x_tile_out = torch.cat(outs, dim=0)
                 for i, bbox in enumerate(bboxes):
                     self.x_buffer[bbox.slicer] += x_tile_out[i*N:(i+1)*N, :, :, :]
