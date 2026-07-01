@@ -1,6 +1,15 @@
-# Release Notes (v1.01 to v2.3.3)
+# Release Notes (v1.01 to v2.3.4)
 
-This document contains release notes for versions v1.01 through v2.3.3 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.3.4 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.3.4
+
+- **Added**: **LoRA load logging** — when the active LoRA stack changes, `extensions-builtin/Lora/networks.py` prints per-file UNet/CLIP load lines (loaded key count, multiplier, skipped keys) to the console; duplicate prompts are suppressed via a fingerprint of loaded networks (`3798a083`).
+- **Fixed**: **SDXL LoRA layer mapping** — SDXL upsampler conv keys map to `output_blocks_*_2_conv` (not SD1.x `type=1` on `up_blocks_0`); SDXL CLIP/OpenCLIP alias keys and Forge-style diffusers lookup paths so more LoRA keys resolve (`3798a083`).
+- **Summary**: Console LoRA load diagnostics and SDXL-focused network layer mapping fixes.
+- **Release Note**: [v2.3.4 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3.4)
 
 ---
 
