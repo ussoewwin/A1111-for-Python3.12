@@ -1,83 +1,83 @@
-# A1111 RES4LYF 統合 — 完全作業解説書
+# A1111 RES4LYF Integration — Complete Technical Guide
 
-**対象リポジトリ:** `D:\USERFILES\A1111`  
-**作成日:** 2026-07-01  
-**目的:** ComfyUI カスタムノード RES4LYF のサンプラー／スケジューラーを、Automatic1111 (A1111) のネイティブ UI から利用可能にする。  
-**前提:** `modules/RES4LYF/` と `ComfyUI-master/` は **本統合では無改変**（配置のみ）。
-
----
-
-## 目次
-
-1. [概要と設計方針](#1-概要と設計方針)
-2. [変更ファイル一覧](#2-変更ファイル一覧)
-3. [アーキテクチャ](#3-アーキテクチャ)
-4. [起動から生成までのデータフロー](#4-起動から生成までのデータフロー)
-5. [追加ファイル全文と技術解説](#5-追加ファイル全文と技術解説)
-6. [修正ファイル全文と技術解説](#6-修正ファイル全文と技術解説)
-7. [遭遇したエラーと対処](#7-遭遇したエラーと対処)
-8. [Forge との差分まとめ](#8-forge-との差分まとめ)
-9. [制限事項と今後の拡張](#9-制限事項と今後の拡張)
+**Target repository:** `D:\USERFILES\A1111`  
+**Created:** 2026-07-01  
+**Goal:** Expose RES4LYF (ComfyUI custom node) samplers and schedulers in the native A1111 UI.  
+**Scope:** `modules/RES4LYF/` and `ComfyUI-master/` are **unchanged** in this integration (vendored/placed only).
 
 ---
 
-## 1. 概要と設計方針
+## Table of contents
 
-### 1.1 何を達成したか
-
-- A1111 の **Sampling method** ドロップダウンに RES4LYF 由来のサンプラー（約 100 件超、Forge と同等の RK 動的登録を含む）を追加
-- A1111 の **Schedule type** に `beta57` と `bong_tangent` を追加
-- RES4LYF サンプラー選択時に **画像生成が正常完了**する（`model_sampling` 欠如・`CFGDenoiser` 引数不一致・名前衝突などを解消）
-
-### 1.2 設計原則
-
-| 原則 | 内容 |
-|------|------|
-| RES4LYF 本体を触らない | `modules/RES4LYF/**` は ComfyUI ノードのコピーのまま |
-| A1111 コアを最小変更 | `initialize.py` に起動フック数行のみ。`sd_samplers.py` 等は未改変 |
-| 接着剤パターン | Forge の `modules_forge/forge_res4lyf_samplers.py` と同型の **glue + shim** |
-| 実行時のみ互換化 | `res4lyf_shim_context` で ComfyUI 想定属性を一時注入し、終了時に復元 |
-| 標準サンプラー保護 | `dpmpp_2m` / `euler` 等の名前衝突時は RES4LYF 側をスキップ |
-
-### 1.3 外部依存（配置のみ・本文書のコード変更対象外）
-
-- `ComfyUI-master/` — `comfy.*` ランタイム（`sys.path` へ手動追加）
-- `modules/RES4LYF/` — RES4LYF 実装本体
-- venv 追加パッケージ例: `torchaudio`, `av`, `pywavelets`, `comfy-kitchen`（不足時は glue 側が pip 試行または手動導入）
-
-### 1.4 環境側の手動変更（コード外）
-
-`requirements_versions_py312.txt` / `requirements_versions_py312_windows.txt` において、  
-`einops==0.4.1` 固定を **`einops>=0.4.1`** に緩和（`from einops import einsum` が ComfyUI / spandrel 側で必要なため）。
+1. [Overview and design](#1-overview-and-design)
+2. [Changed files](#2-changed-files)
+3. [Architecture](#3-architecture)
+4. [Data flow from startup to generation](#4-data-flow-from-startup-to-generation)
+5. [New files (full text and notes)](#5-new-files-full-text-and-notes)
+6. [Modified files (full text and notes)](#6-modified-files-full-text-and-notes)
+7. [Errors encountered and fixes](#7-errors-encountered-and-fixes)
+8. [Differences from Forge](#8-differences-from-forge)
+9. [Limitations and future work](#9-limitations-and-future-work)
 
 ---
 
-## 2. 変更ファイル一覧
+## 1. Overview and design
 
-### 2.1 新規追加（3 ファイル）
+### 1.1 What was achieved
 
-| パス | 行数 | 役割 |
-|------|------|------|
-| `modules/a1111_res4lyf_samplers.py` | 426 | 登録 glue（path・mock・RK 動的追加・UI 登録・スケジューラ） |
-| `modules/a1111_res4lyf_shim.py` | 292 | 実行時 shim（`model_sampling`・`diffusion_model` エイリアス・`CFGDenoiser` パッチ） |
-| `md/A1111_RES4LYF_SHIM_PLAN.md` | — | Phase 1 実装前の技術計画書（参照用） |
+- Added RES4LYF samplers (100+ entries, including Forge-parity dynamic RK registration) to the A1111 **Sampling method** dropdown
+- Added `beta57` and `bong_tangent` to A1111 **Schedule type**
+- Image generation **completes successfully** when a RES4LYF sampler is selected (fixed missing `model_sampling`, `CFGDenoiser` kwargs mismatch, name collisions, etc.)
 
-### 2.2 修正（1 ファイル）
+### 1.2 Design principles
 
-| パス | 変更内容 |
-|------|----------|
-| `modules/initialize.py` | `sd_samplers.set_samplers()` 直後に RES4LYF 登録フックを追加（10 行） |
+| Principle | Description |
+|-----------|-------------|
+| Do not modify RES4LYF core | `modules/RES4LYF/**` stays a ComfyUI node copy |
+| Minimal A1111 core changes | Only a short startup hook in `initialize.py`; `sd_samplers.py` etc. untouched |
+| Glue + shim pattern | Same as Forge `modules_forge/forge_res4lyf_samplers.py` |
+| Runtime-only compatibility | `res4lyf_shim_context` injects ComfyUI-expected attributes temporarily, then restores |
+| Protect standard samplers | On name collision (`dpmpp_2m`, `euler`, etc.), skip RES4LYF registration |
 
-### 2.3 本書の対象外
+### 1.3 External dependencies (placement only; out of scope for code edits in this doc)
+
+- `ComfyUI-master/` — `comfy.*` runtime (added to `sys.path` manually)
+- `modules/RES4LYF/` — RES4LYF implementation
+- Extra venv packages: `torchaudio`, `av`, `pywavelets`, `comfy-kitchen` (glue may try pip or user installs manually)
+
+### 1.4 Manual environment change (outside integration code)
+
+In `requirements_versions_py312.txt` / `requirements_versions_py312_windows.txt`,  
+relaxed `einops==0.4.1` to **`einops>=0.4.1`** (ComfyUI / spandrel need `from einops import einsum`).
+
+---
+
+## 2. Changed files
+
+### 2.1 New files (3)
+
+| Path | Lines | Role |
+|------|-------|------|
+| `modules/a1111_res4lyf_samplers.py` | 426 | Registration glue (path, mock, dynamic RK, UI, schedulers) |
+| `modules/a1111_res4lyf_shim.py` | 292 | Runtime shim (`model_sampling`, `diffusion_model` alias, `CFGDenoiser` patch) |
+| `md/A1111_RES4LYF_SHIM_PLAN.md` | — | Phase 1 technical plan (reference) |
+
+### 2.2 Modified (1 file)
+
+| Path | Change |
+|------|--------|
+| `modules/initialize.py` | RES4LYF registration hook after `sd_samplers.set_samplers()` (+10 lines) |
+
+### 2.3 Out of scope for this document
 
 - `modules/RES4LYF/**`
 - `ComfyUI-master/**`
 
 ---
 
-## 3. アーキテクチャ
+## 3. Architecture
 
-### 3.1 二層構造（Forge と同型）
+### 3.1 Two-layer structure (same as Forge)
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -88,91 +88,91 @@
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │  modules/a1111_res4lyf_samplers.py  (GLUE)                     │
-│    · ComfyUI-master を sys.path へ                             │
-│    · folder_paths / server を mock                             │
-│    · import modules.RES4LYF → extra_samplers 構築            │
-│    · _register_extra_rk_beta_samplers (Forge 同等の動的 RK)    │
-│    · comfy.k_diffusion → k_diffusion.sampling 同期             │
-│    · SamplerData を all_samplers へ append                   │
+│    · Add ComfyUI-master to sys.path                            │
+│    · Mock folder_paths / server                                │
+│    · import modules.RES4LYF → build extra_samplers             │
+│    · _register_extra_rk_beta_samplers (Forge-parity dynamic RK)  │
+│    · Sync comfy.k_diffusion → k_diffusion.sampling             │
+│    · Append SamplerData to all_samplers                        │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
 │  modules/a1111_res4lyf_shim.py  (SHIM)                        │
-│    · res4lyf_shim_context: LatentDiffusion へ一時属性注入      │
-│    · patch_cfg_denoiser_forward: 未知 kwargs を除去          │
-│    · ensure_res4lyf_extra_args: model_options ネスト確保     │
+│    · res4lyf_shim_context: temporary LatentDiffusion attrs     │
+│    · patch_cfg_denoiser_forward: drop unknown kwargs           │
+│    · ensure_res4lyf_extra_args: model_options nesting          │
 └───────────────────────────┬─────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────┐
-│  modules/RES4LYF/  (ComfyUI ノード・無改変)                    │
-│    rk_sampler_beta.sample_rk_beta 等                           │
+│  modules/RES4LYF/  (ComfyUI node, unmodified)                │
+│    rk_sampler_beta.sample_rk_beta, etc.                        │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 モデルオブジェクト階層の差（核心）
+### 3.2 Model object hierarchy (core issue)
 
-RES4LYF は ComfyUI の `BaseModel` を想定する。A1111 は最内層が `LatentDiffusion` であり、属性が一致しない。
+RES4LYF expects ComfyUI `BaseModel`. A1111’s innermost object is `LatentDiffusion` with different attributes.
 
-| パス | ComfyUI / Forge | A1111 |
+| Path | ComfyUI / Forge | A1111 |
 |------|-----------------|-------|
 | `model` | `CFGDenoiser` | `CFGDenoiser` ✓ |
 | `model.inner_model` | `CompVisDenoiser` | `CompVisDenoiser` ✓ |
 | `model.inner_model.inner_model` | `BaseModel` | **`LatentDiffusion`** ✗ |
-| `.model_sampling` | `comfy.model_sampling.EPS` 等 | **無い** → shim で注入 |
-| `.diffusion_model` | U-Net 直参照 | **`model.diffusion_model` にネスト** → `__dict__` エイリアス |
-| `.device` | 属性 | **読み取り専用 `@property`**（設定不要） |
+| `.model_sampling` | `comfy.model_sampling.EPS` etc. | **missing** → injected by shim |
+| `.diffusion_model` | direct U-Net ref | **nested under `model.diffusion_model`** → `__dict__` alias |
+| `.device` | attribute | **read-only `@property`** (no assignment needed) |
 
 ---
 
-## 4. 起動から生成までのデータフロー
+## 4. Data flow from startup to generation
 
-### 4.1 起動時（`initialize_rest`）
+### 4.1 At startup (`initialize_rest`)
 
-1. A1111 標準の `sd_samplers.set_samplers()`
+1. A1111 standard `sd_samplers.set_samplers()`
 2. `a1111_res4lyf_samplers.register_res4lyf_samplers()`
-   - `_ensure_comfyui_on_path()` → `ComfyUI-master` を `sys.path[0]` に
-   - `_mock_comfyui_globals()` → 不足モジュールをスタブ
-   - `from modules import RES4LYF` → `__init__.py` 内 `add_samplers()` が走り `extra_samplers` 構築
-   - `_register_extra_rk_beta_samplers()` → Forge 同等の RK 名を `extra_samplers` に追加（衝突名はスキップ）
-   - `comfy.k_diffusion.sampling` の `sample_*` を `k_diffusion.sampling` にコピー
-   - 各名前で `SamplerData` を `all_samplers` に追加 → `set_samplers()` 再実行
-   - `patch_cfg_denoiser_forward()` を一度だけ適用
-3. `register_res4lyf_schedulers()` → `beta57`, `bong_tangent` を `sd_schedulers` に追加
+   - `_ensure_comfyui_on_path()` → `ComfyUI-master` at `sys.path[0]`
+   - `_mock_comfyui_globals()` → stub missing modules
+   - `from modules import RES4LYF` → `add_samplers()` in `__init__.py` builds `extra_samplers`
+   - `_register_extra_rk_beta_samplers()` → add Forge-parity RK names (skip collisions)
+   - Copy `sample_*` from `comfy.k_diffusion.sampling` to `k_diffusion.sampling`
+   - Append `SamplerData` per name → call `set_samplers()` again
+   - Apply `patch_cfg_denoiser_forward()` once
+3. `register_res4lyf_schedulers()` → add `beta57`, `bong_tangent` to `sd_schedulers`
 
-### 4.2 生成時（RES4LYF サンプラー選択）
+### 4.2 At generation (RES4LYF sampler selected)
 
-1. UI → `SamplerData.constructor(model)` → `_build_res4lyf_constructor` が返したクロージャ
-2. `KDiffusionSampler(wrapped_func, model)` 生成
-3. `wrapped_func(cfg_denoiser, x, ...)` 呼び出し時:
+1. UI → `SamplerData.constructor(model)` → closure from `_build_res4lyf_constructor`
+2. Build `KDiffusionSampler(wrapped_func, model)`
+3. On `wrapped_func(cfg_denoiser, x, ...)`:
    - `ensure_res4lyf_extra_args(kwargs["extra_args"])`
-   - `with res4lyf_shim_context(cfg_denoiser):` で `model_sampling` / `diffusion_model` 注入
-   - `k_diffusion.sampling.sample_<name>(...)` → 内部で `rk_sampler_beta.sample_rk_beta`
-4. RES4LYF が `self.model(x, sigma, **extra_args)` を呼ぶ
-5. `CFGDenoiser.forward` はパッチ済み → `model_options` 等の余分な kwargs を無視して実行
+   - `with res4lyf_shim_context(cfg_denoiser):` inject `model_sampling` / `diffusion_model`
+   - `k_diffusion.sampling.sample_<name>(...)` → `rk_sampler_beta.sample_rk_beta` internally
+4. RES4LYF calls `self.model(x, sigma, **extra_args)`
+5. Patched `CFGDenoiser.forward` ignores extra kwargs such as `model_options`
 
 ---
 
-## 5. 追加ファイル全文と技術解説
+## 5. New files (full text and notes)
 
-### 5.1 `modules/a1111_res4lyf_samplers.py`（全文）
+### 5.1 `modules/a1111_res4lyf_samplers.py` (full text)
 
 ```python
 """
 A1111 integration for RES4LYF samplers and schedulers.
 
-Forge (Stable-Diffusion-WebUI-Forge-Nunchaku) 側の
-`modules_forge/forge_res4lyf_samplers.py` を A1111 向けに書き直したもの。
+A1111 port of Forge (Stable-Diffusion-WebUI-Forge-Nunchaku)
+`modules_forge/forge_res4lyf_samplers.py`.
 
-Forge との主な差分:
-- A1111 には ``sd_samplers.add_sampler()`` が無いため
-  ``all_samplers`` を直接拡張し ``set_samplers()`` を再実行する
-- ComfyUI ランタイム (``ComfyUI-master``) は ``modules/paths.py`` では
-  sys.path に追加されないため、本モジュールが自前で追加する
-- ``bong_tangent`` は Forge の ``sd_schedulers.py`` にはネイティブ実装があったが
-  A1111 には無いため、``beta57`` と併せて本モジュール側で登録する
-- ``comfy.samplers.beta_scheduler`` / RES4LYF ``sigmas.bong_tangent_scheduler`` は
-  ComfyUI 由来のシグネチャなので、A1111 の
-  ``(n, sigma_min, sigma_max, inner_model, device)`` にラップする
+Main differences from Forge:
+- A1111 has no ``sd_samplers.add_sampler()``;
+  extend ``all_samplers`` directly and call ``set_samplers()`` again
+- ComfyUI runtime (``ComfyUI-master``) is not added to sys.path by
+  ``modules/paths.py``; this module adds it
+- ``bong_tangent`` was native in Forge ``sd_schedulers.py`` but
+  missing on A1111; registered here with ``beta57``
+- ``comfy.samplers.beta_scheduler`` / RES4LYF ``sigmas.bong_tangent_scheduler`` use
+  ComfyUI signatures; wrapped for A1111
+  ``(n, sigma_min, sigma_max, inner_model, device)``
 """
 
 from __future__ import annotations
@@ -187,7 +187,7 @@ logger = logging.getLogger(__name__)
 
 
 def _ensure_comfyui_on_path() -> Optional[str]:
-    """``ComfyUI-master`` を sys.path に挿入。既にあれば何もしない。"""
+    """Insert ``ComfyUI-master`` on sys.path if not already present."""
     from modules.paths_internal import script_path
     comfyui_path = os.path.join(script_path, "ComfyUI-master")
     if not os.path.isdir(comfyui_path):
@@ -200,7 +200,7 @@ def _ensure_comfyui_on_path() -> Optional[str]:
 
 
 def _install_optional_deps() -> None:
-    """``pywavelets`` / ``comfy-kitchen`` を可能なら pip で入れる。失敗しても致命的にしない。"""
+    """Install ``pywavelets`` / ``comfy-kitchen`` via pip when possible; non-fatal on failure."""
     try:
         from modules import launch_utils
     except ImportError:
@@ -223,9 +223,9 @@ def _install_optional_deps() -> None:
 
 def _mock_comfyui_globals() -> None:
     """
-    ``folder_paths`` と ``server.PromptServer`` を、
-    ComfyUI 本体を起動していない状態でも import できるように差し込む。
-    ``ComfyUI-master`` に本物の ``folder_paths.py`` があればそれを優先する。
+    Inject ``folder_paths`` and ``server.PromptServer`` so RES4LYF can import
+    without running a full ComfyUI server.
+    Prefer the real ``folder_paths.py`` from ``ComfyUI-master`` when available.
     """
     if 'folder_paths' not in sys.modules:
         try:
@@ -325,8 +325,14 @@ def _register_extra_rk_beta_samplers() -> list:
         logger.warning("[RES4LYF] RES4LYF.extra_samplers not available")
         return []
 
-    # A1111 の標準サンプラーが参照する ``k_diffusion.sampling.sample_<name>``
-    # と衝突する名前は絶対に上書きしない。
+    # Never overwrite names used by A1111 standard samplers in
+    # ``k_diffusion.sampling.sample_<name>``.
+    # ``RK_SAMPLER_NAMES_BETA_NO_FOLDERS`` includes ``dpmpp_2m``, ``dpmpp_3m``,
+    # ``dpmpp_2s``, ``dpmpp_sde_2s``, ``dpmpp_3s``, ``euler``, ``ddim``, etc.—same
+    # names as A1111 DPM++ 2M / Euler / DDIM.
+    # Overwriting via ``setattr(k_diffusion.sampling, "sample_<name>", ...)``
+    # replaces ``getattr(k_diffusion.sampling, "sample_<name>")`` used by
+    # standard samplers and breaks them.
     protected_funcnames = set()
     try:
         from modules import sd_samplers_kdiffusion
@@ -359,6 +365,7 @@ def _register_extra_rk_beta_samplers() -> list:
         if name == "none":
             continue
         if f"sample_{name}" in protected_funcnames:
+            # Collision with standard sampler name; skip.
             skipped_collisions.append(name)
             continue
         if name not in extra:
@@ -378,6 +385,10 @@ def _register_extra_rk_beta_samplers() -> list:
             f"overwrite A1111 standard samplers: {skipped_collisions}"
         )
 
+    # Mirror RES4LYF/__init__.py::add_samplers so that comfy.k_diffusion.sampling
+    # also carries a ``sample_<name>`` attribute for the newly-added samplers.
+    # This is required for the later comfy -> k_diffusion sync step to find
+    # the function.
     if added_names:
         try:
             from comfy.samplers import KSampler, k_diffusion_sampling
@@ -396,7 +407,12 @@ def _register_extra_rk_beta_samplers() -> list:
 
 
 def _build_res4lyf_constructor(sampler_key: str) -> Callable:
-    """``SamplerData.constructor`` 用のクロージャを返す。"""
+    """Return a closure for ``SamplerData.constructor``.
+
+    Wraps the ``func`` passed to A1111 ``KDiffusionSampler`` with
+    :func:`modules.a1111_res4lyf_shim.res4lyf_shim_context` where RES4LYF
+    needs ComfyUI-compatible APIs.
+    """
     def constructor(model):
         import functools
 
@@ -416,6 +432,8 @@ def _build_res4lyf_constructor(sampler_key: str) -> Callable:
             with res4lyf_shim_context(cfg_denoiser):
                 return original_func(cfg_denoiser, x, *args, **kwargs)
 
+        # KDiffusionSampler inspects signature(self.func).parameters for
+        # n, sigmas, sigma_min, sigma_max, etc.; preserve metadata.
         functools.update_wrapper(wrapped_func, original_func)
 
         return sd_samplers_kdiffusion.KDiffusionSampler(wrapped_func, model)
@@ -423,7 +441,7 @@ def _build_res4lyf_constructor(sampler_key: str) -> Callable:
 
 
 def register_res4lyf_samplers() -> None:
-    """RES4LYF のサンプラーを A1111 の ``all_samplers`` に追加する。"""
+    """Register RES4LYF samplers into A1111 ``all_samplers``."""
     try:
         _install_optional_deps()
         _mock_comfyui_globals()
@@ -432,10 +450,13 @@ def register_res4lyf_samplers() -> None:
             logger.warning("[RES4LYF] Aborting sampler registration (ComfyUI-master missing)")
             return
 
+        # Import RES4LYF; __init__.py add_samplers() builds comfy.k_diffusion.sample_*
         from modules import RES4LYF
         import comfy.k_diffusion.sampling as comfy_k_diffusion_sampling
         import k_diffusion.sampling
 
+        # Forge fork registers all RK samplers in beta/__init__.py; upstream A1111
+        # copy registers ~17. Add the rest here without editing RES4LYF.
         extra_added = _register_extra_rk_beta_samplers()
         if extra_added:
             logger.info(f"[RES4LYF] Added {len(extra_added)} extra RK samplers (Forge parity)")
@@ -445,6 +466,7 @@ def register_res4lyf_samplers() -> None:
             logger.info("[RES4LYF] No samplers found in extra_samplers")
             return
 
+        # Copy comfy.k_diffusion.sampling -> k_diffusion.sampling
         if k_diffusion.sampling is not comfy_k_diffusion_sampling:
             for sampler_name in extra_samplers:
                 fn = getattr(comfy_k_diffusion_sampling, f"sample_{sampler_name}", None)
@@ -479,6 +501,9 @@ def register_res4lyf_samplers() -> None:
         else:
             logger.info("[RES4LYF] No new samplers to register")
 
+        # Install CFGDenoiser.forward wrapper so ComfyUI-style kwargs that
+        # RES4LYF pushes through ``**extra_args`` don't crash A1111's strict
+        # forward signature. Idempotent.
         try:
             from modules.a1111_res4lyf_shim import patch_cfg_denoiser_forward
             patch_cfg_denoiser_forward()
@@ -492,7 +517,13 @@ def register_res4lyf_samplers() -> None:
 
 
 def register_res4lyf_schedulers() -> None:
-    """RES4LYF スケジューラーを A1111 の ``sd_schedulers`` に登録する。"""
+    """
+Register RES4LYF schedulers into A1111 ``sd_schedulers``.
+
+    - ``beta57``: wrap ComfyUI ``beta_scheduler(model_sampling, steps, alpha=0.5, beta=0.7)`` to
+      A1111 ``(n, sigma_min, sigma_max, inner_model, device)``
+    - ``bong_tangent``: wrap RES4LYF ``sigmas.bong_tangent_scheduler(...)`` similarly
+    """
     try:
         _ensure_comfyui_on_path()
         _mock_comfyui_globals()
@@ -547,40 +578,41 @@ def register_res4lyf_schedulers() -> None:
         logger.warning(f"[RES4LYF] Failed to import RES4LYF for schedulers: {e}")
     except Exception as e:
         logger.error(f"[RES4LYF] Error registering schedulers: {e}", exc_info=True)
+
 ```
 
-#### 5.1.1 関数別の意味
+#### 5.1.1 Function reference
 
-| 関数 | 技術的意味 |
-|------|------------|
-| `_ensure_comfyui_on_path` | RES4LYF は `import comfy.*` 前提。A1111 は `ComfyUI-master` を自動で path に入れないため、glue が `script_path/ComfyUI-master` を `sys.path.insert(0, ...)` する |
-| `_install_optional_deps` | RES4LYF の一部機能が `pywavelets` / `comfy-kitchen` を要求。Forge と同様に起動時 pip を試行（失敗しても登録自体は続行） |
-| `_mock_comfyui_globals` | RES4LYF import 時に `folder_paths` / `server.PromptServer` が無いと落ちる箇所へのスタブ。本物が import できれば本物を優先 |
-| `_register_extra_rk_beta_samplers` | **Forge パリティの要**。`RK_SAMPLER_NAMES_BETA_NO_FOLDERS` 全件から `sample_rk_beta` クロージャを `extra_samplers` に登録。implicit RK 系は `_ode` を付けない。A1111 標準の `sample_*` 名と衝突するものは **登録しない**（後述の致命バグ修正） |
-| `_build_res4lyf_constructor` | A1111 の `SamplerData` は `constructor(model) -> Sampler` 形式。返す `KDiffusionSampler` の `func` を shim で包み、RES4LYF 実行時だけ ComfyUI 互換属性を付与 |
-| `register_res4lyf_samplers` | 上記を束ね、`all_samplers` / `all_samplers_map` を拡張し `set_samplers()` で UI 用 alias リストを再構築 |
-| `register_res4lyf_schedulers` | ComfyUI シグネチャの scheduler を A1111 の `(n, sigma_min, sigma_max, inner_model, device)` にラップして登録 |
+| Function | Technical role |
+|----------|----------------|
+| `_ensure_comfyui_on_path` | RES4LYF requires `import comfy.*`. A1111 does not add `ComfyUI-master` automatically; glue inserts `script_path/ComfyUI-master` at `sys.path[0]` |
+| `_install_optional_deps` | Some RES4LYF features need `pywavelets` / `comfy-kitchen`. Try pip at startup (Forge-style); registration continues on failure |
+| `_mock_comfyui_globals` | Stub `folder_paths` / `server.PromptServer` when missing; prefer real modules if importable |
+| `_register_extra_rk_beta_samplers` | **Forge parity.** Register all `RK_SAMPLER_NAMES_BETA_NO_FOLDERS` via `sample_rk_beta` closures. No `_ode` for implicit RK families. **Skip** names that collide with A1111 standard `sample_*` (critical bugfix) |
+| `_build_res4lyf_constructor` | A1111 `SamplerData` uses `constructor(model) -> Sampler`. Returns `KDiffusionSampler` whose `func` is wrapped with shim for ComfyUI-compatible attributes at runtime only |
+| `register_res4lyf_samplers` | Orchestrates glue: extend `all_samplers` / `all_samplers_map`, call `set_samplers()` |
+| `register_res4lyf_schedulers` | Wrap ComfyUI scheduler signatures to A1111 `(n, sigma_min, sigma_max, inner_model, device)` |
 
-#### 5.1.2 `k_diffusion` 二重モジュール問題
+#### 5.1.2 Dual `k_diffusion` module issue
 
-- RES4LYF は **`comfy.k_diffusion.sampling`** に `sample_<name>` を定義
-- A1111 の `KDiffusionSampler` は **`k_diffusion.sampling`**（Crowsonkb 版、別モジュールオブジェクト）を参照
-- 同一プロセスでも **別インスタンス** のため、`register_res4lyf_samplers` 内で属性コピーが必須:
+- RES4LYF defines `sample_<name>` on **`comfy.k_diffusion.sampling`**
+- A1111 `KDiffusionSampler` uses **`k_diffusion.sampling`** (Crowsonkb fork, different module object)
+- Same process, different module instances → copy attributes in `register_res4lyf_samplers`:
 
 ```python
 setattr(k_diffusion.sampling, f"sample_{sampler_name}", fn)
 ```
 
-#### 5.1.3 名前衝突保護（標準サンプラー破壊の防止）
+#### 5.1.3 Name collision protection (standard samplers)
 
-`RK_SAMPLER_NAMES_BETA_NO_FOLDERS` には `dpmpp_2m`, `euler`, `ddim` 等が含まれる。  
-これらを `k_diffusion.sampling` に上書きすると、A1111 標準の DPM++ 2M / Euler が RES4LYF 実装に差し替わり、**標準サンプラーが壊れる**。
+`RK_SAMPLER_NAMES_BETA_NO_FOLDERS` includes `dpmpp_2m`, `euler`, `ddim`, etc.  
+Overwriting `k_diffusion.sampling` would replace A1111 DPM++ 2M / Euler with RES4LYF implementations and **break standard samplers**.
 
-対策: `sd_samplers_kdiffusion.samplers_k_diffusion` から既存 `sample_*` 名をスナップショットし、衝突する RES4LYF エントリは **スキップ**（ログに `Skipped N name(s)...`）。
+Fix: snapshot existing `sample_*` names from `sd_samplers_kdiffusion.samplers_k_diffusion` and **skip** colliding RES4LYF entries (log: `Skipped N name(s)...`).
 
 ---
 
-### 5.2 `modules/a1111_res4lyf_shim.py`（全文）
+### 5.2 `modules/a1111_res4lyf_shim.py` (full text)
 
 ```python
 """
@@ -619,25 +651,49 @@ logger = logging.getLogger(__name__)
 
 
 def _get_eps_base():
-    """Import ``comfy.model_sampling.EPS`` lazily."""
+    """Import ``comfy.model_sampling.EPS`` lazily.
+
+    Import is deferred so this module can be imported at A1111 startup
+    even before ``ComfyUI-master`` has been added to ``sys.path``
+    (``a1111_res4lyf_samplers._ensure_comfyui_on_path`` runs at
+    registration time).
+    """
     from comfy.model_sampling import EPS  # noqa: WPS433
     return EPS
 
 
 class _ShimBase:
-    """Placeholder — real EPS subclass is built lazily in build_shim."""
+    """Placeholder replaced by the real EPS-derived class at first call.
+
+    We can't inherit from ``EPS`` at module import time because
+    ``comfy.model_sampling`` may not yet be importable. Instead we build
+    the concrete class lazily inside :func:`build_shim`.
+    """
 
 
 _shim_cls_cache = None
 
 
 def build_shim(comp_vis_denoiser):
-    """Return an EPS-derived shim instance (class cached for isinstance checks)."""
+    """Return an instance of the EPS-derived shim.
+
+    Class is cached so ``isinstance(shim, EPS)`` returns True consistently
+    across calls (a fresh class per call would break equality-style
+    checks in RES4LYF).
+    """
     global _shim_cls_cache
     if _shim_cls_cache is None:
         eps_cls = _get_eps_base()
 
         class A1111ModelSamplingShim(eps_cls):
+            """
+            Bridges A1111's ``CompVisDenoiser`` into ComfyUI's
+            ``ModelSamplingDiscrete + EPS`` API.
+
+            Only EPS parameterization (SD1 / SDXL). V_PREDICTION and
+            later families are Phase 2+.
+            """
+
             sigma_data = 1.0
 
             def __init__(self, cvd):
@@ -673,6 +729,9 @@ def build_shim(comp_vis_denoiser):
                 percent = 1.0 - percent
                 return self.sigma(torch.tensor(percent * 999.0)).item()
 
+            # calculate_input / calculate_denoised / noise_scaling /
+            # inverse_noise_scaling are inherited from EPS.
+
         _shim_cls_cache = A1111ModelSamplingShim
 
     return _shim_cls_cache(comp_vis_denoiser)
@@ -682,7 +741,24 @@ _cfg_forward_patched = False
 
 
 def patch_cfg_denoiser_forward():
-    """Wrap CFGDenoiser.forward to drop kwargs A1111 does not accept."""
+    """Idempotently wrap ``CFGDenoiser.forward`` to silently drop kwargs
+    it does not accept.
+
+    RES4LYF sampler internals do ``self.model(x, sigma, **extra_args)``.
+    Once :func:`ensure_res4lyf_extra_args` has added ``model_options``
+    (etc.) to ``extra_args`` on the sampler side, those keys leak into
+    ``CFGDenoiser.forward`` and blow up because A1111's forward has a
+    strict signature (``x, sigma, uncond, cond, cond_scale,
+    s_min_uncond, image_cond``).
+
+    The wrapper filters keyword arguments to only those accepted by the
+    real ``forward`` signature. For all non-RES4LYF sampler paths on
+    A1111 the ``extra_args`` dict never contains foreign keys, so the
+    wrapper is a no-op there.
+
+    Safe to call multiple times. First call installs the wrapper;
+    subsequent calls are no-ops.
+    """
     global _cfg_forward_patched
     if _cfg_forward_patched:
         return
@@ -724,7 +800,16 @@ def patch_cfg_denoiser_forward():
 
 
 def ensure_res4lyf_extra_args(extra_args):
-    """Add ComfyUI-style model_options nesting if missing."""
+    """Ensure ``extra_args`` has the ComfyUI-style nesting RES4LYF expects.
+
+    RES4LYF assigns into ``extra_args['model_options']['transformer_options']``
+    directly. A1111's ``sampler_extra_args`` only contains ``cond`` /
+    ``image_cond`` / ``uncond`` / ``cond_scale`` / ``s_min_uncond``, so we
+    add the missing keys with empty dicts. Idempotent; safe to call
+    multiple times.
+
+    ``extra_args`` is mutated in place. Non-dict input is a no-op.
+    """
     if not isinstance(extra_args, dict):
         return
     extra_args.setdefault("model_options", {})
@@ -735,10 +820,34 @@ def ensure_res4lyf_extra_args(extra_args):
 
 @contextmanager
 def res4lyf_shim_context(cfg_denoiser):
-    """Temporarily attach model_sampling and diffusion_model alias on LatentDiffusion."""
+    """Attach ComfyUI-compatible attributes for one RES4LYF sampler run.
+
+    Parameters
+    ----------
+    cfg_denoiser :
+        The ``CFGDenoiser`` instance passed as the first positional
+        argument to any k-diffusion ``sample_*`` function on A1111.
+        We expect:
+        - ``cfg_denoiser.inner_model`` -> k-diffusion ``CompVisDenoiser``
+        - ``cfg_denoiser.inner_model.inner_model`` -> ``LatentDiffusion``
+
+    Notes
+    -----
+    ``LatentDiffusion.device`` already exists as a read-only ``@property``,
+    so we do **not** attempt to set it. RES4LYF's ``model.inner_model.inner_model.device``
+    read will resolve to the property getter, which returns the model's
+    parameter device.
+
+    Yields
+    ------
+    None
+        The context body runs with the shim installed. Original state
+        is restored on exit (both normal and exceptional).
+    """
     inner_ldm = cfg_denoiser.inner_model.inner_model
     comp_vis = cfg_denoiser.inner_model
 
+    # --- 1. install model_sampling ------------------------------------
     had_model_sampling = hasattr(inner_ldm, "model_sampling")
     original_model_sampling = getattr(inner_ldm, "model_sampling", None)
 
@@ -749,6 +858,13 @@ def res4lyf_shim_context(cfg_denoiser):
         yield
         return
 
+    # --- 2. install diffusion_model alias (A1111 LDM has model.diffusion_model,
+    #        ComfyUI BaseModel has .diffusion_model directly) ---------
+    #
+    # We assign via ``__dict__`` directly so torch.nn.Module.__setattr__ does
+    # not register the U-Net twice under _modules (which would double up in
+    # .parameters()/.state_dict()). Attribute lookup on the instance still
+    # finds __dict__ before Module.__getattr__ fires.
     diffusion_installed = False
     original_diffusion_present = "diffusion_model" in inner_ldm.__dict__
     original_diffusion_val = inner_ldm.__dict__.get("diffusion_model", None)
@@ -764,6 +880,7 @@ def res4lyf_shim_context(cfg_denoiser):
     try:
         yield
     finally:
+        # --- restore diffusion_model ---
         if diffusion_installed:
             try:
                 if original_diffusion_present:
@@ -775,6 +892,7 @@ def res4lyf_shim_context(cfg_denoiser):
                     "[RES4LYF shim] cleanup diffusion_model failed",
                     exc_info=True,
                 )
+        # --- restore model_sampling ---
         try:
             if had_model_sampling:
                 inner_ldm.model_sampling = original_model_sampling
@@ -788,44 +906,45 @@ def res4lyf_shim_context(cfg_denoiser):
                 "[RES4LYF shim] cleanup: could not restore model_sampling",
                 exc_info=True,
             )
+
 ```
 
-#### 5.2.1 `A1111ModelSamplingShim` の役割
+#### 5.2.1 Role of `A1111ModelSamplingShim`
 
-- `rk_sampler_beta.py` は `isinstance(model_sampling, EPS)` および `calculate_denoised` 等を **ComfyUI の EPS クラス**経由で呼ぶ
-- A1111 の `CompVisDenoiser` は同等数学を持つが **API 形状が異なる**
-- shim は `CompVisDenoiser.sigmas` / `sigma_to_t` / `t_to_sigma` を委譲し、EPS 継承クラスとして振る舞う
-- `sigma_data = 1.0` は ComfyUI EPS の慣例値（SD1/SDXL EPS 想定）
+- `rk_sampler_beta.py` calls `isinstance(model_sampling, EPS)` and `calculate_denoised` via **ComfyUI EPS**
+- A1111 `CompVisDenoiser` has equivalent math but **different API shape**
+- Shim delegates `sigmas` / `sigma_to_t` / `t_to_sigma` and subclasses EPS
+- `sigma_data = 1.0` is ComfyUI EPS convention (SD1/SDXL EPS)
 
-#### 5.2.2 `__dict__` による `diffusion_model` エイリアス
+#### 5.2.2 `diffusion_model` alias via `__dict__`
 
-`inner_ldm.diffusion_model = real_unet` と通常代入すると、`torch.nn.Module.__setattr__` がサブモジュールとして **二重登録**し、`.parameters()` が壊れる可能性がある。
+Assigning `inner_ldm.diffusion_model = real_unet` normally goes through `torch.nn.Module.__setattr__` and may **double-register** the U-Net, breaking `.parameters()`.
 
 ```python
 inner_ldm.__dict__["diffusion_model"] = real_unet
 ```
 
-インスタンス `__dict__` への直接代入により、属性ルックアップは成功するが `_modules` には載らない。
+Lookup succeeds; `_modules` is not updated.
 
 #### 5.2.3 `patch_cfg_denoiser_forward`
 
-RES4LYF 内部: `self.model(x, sigma, **extra_args)`  
-`ensure_res4lyf_extra_args` 後の `extra_args` には `model_options` が含まれる。  
-A1111 の `CFGDenoiser.forward` は `**kwargs` を受け取らないため `TypeError` になる。
+RES4LYF: `self.model(x, sigma, **extra_args)`  
+After `ensure_res4lyf_extra_args`, `extra_args` includes `model_options`.  
+A1111 `CFGDenoiser.forward` does not accept `**kwargs` → `TypeError`.
 
-`inspect.signature` で許可パラメータ集合を取り、フィルタする **冪等** モンキーパッチ。標準サンプラーでは `extra_args` に foreign key が無いため実質 no-op。
+Idempotent monkey-patch: `inspect.signature` → filter kwargs. No-op for standard samplers without foreign keys.
 
-#### 5.2.4 `functools.update_wrapper` との関係
+#### 5.2.4 `functools.update_wrapper`
 
-`_build_res4lyf_constructor` 内で `update_wrapper(wrapped_func, original_func)` により、A1111 の `KDiffusionSampler` が `inspect.signature(self.func)` で検査する `n` / `sigmas` / `sigma_min` / `sigma_max` 等のシグネチャメタデータを維持。
+In `_build_res4lyf_constructor`, `update_wrapper(wrapped_func, original_func)` preserves signature metadata (`n`, `sigmas`, `sigma_min`, `sigma_max`, etc.) that `KDiffusionSampler` inspects.
 
 ---
 
-## 6. 修正ファイル全文と技術解説
+## 6. Modified files (full text and notes)
 
-### 6.1 `modules/initialize.py`（変更箇所のみ）
+### 6.1 `modules/initialize.py` (changed section only)
 
-**変更前（概念）:**
+**Before (conceptual):**
 
 ```python
     from modules import sd_samplers
@@ -835,7 +954,7 @@ A1111 の `CFGDenoiser.forward` は `**kwargs` を受け取らないため `Type
     from modules import extensions
 ```
 
-**変更後（実ファイル）:**
+**After (actual file):**
 
 ```python
     from modules import sd_samplers
@@ -855,84 +974,84 @@ A1111 の `CFGDenoiser.forward` は `**kwargs` を受け取らないため `Type
     from modules import extensions
 ```
 
-#### 6.1.1 なぜこの位置か
+#### 6.1.1 Why this placement
 
-- `sd_samplers.set_samplers()` **の後** — 標準サンプラー一覧が確定してから RES4LYF を **追加**
-- `extensions.list_extensions()` **の前** — Extension より先にネイティブ登録しておくと、UI 再構築タイミングが安定
-- `try/except` + `traceback` — RES4LYF 失敗時も **A1111 本体起動は継続**（Forge フックと同趣旨）
-- `initialize_rest(reload_script_modules=True)` 経由の **リロード時も同じ経路**で再登録される
-
----
-
-## 7. 遭遇したエラーと対処
-
-| # | エラー | 原因 | 対処 |
-|---|--------|------|------|
-| 1 | `ModuleNotFoundError: torchaudio` | RES4LYF → `comfy.sd` 経由の依存 | venv に `pip install torchaudio`（ユーザー手動） |
-| 2 | `ImportError: cannot import name 'einsum' from 'einops'` | `einops==0.4.1` 固定が古すぎる | requirements の pin を `einops>=0.4.1` に緩和 |
-| 3 | `ModuleNotFoundError: av` | ComfyUI 依存 | `pip install av`（ユーザー手動） |
-| 4 | `AttributeError: ... has no attribute 'model_sampling'` | `LatentDiffusion` に ComfyUI 属性無し | `a1111_res4lyf_shim.py` + `res4lyf_shim_context` |
-| 5 | `AttributeError: property 'device' ... has no setter` | shim が `device` を代入しようとした | 代入をやめ、`LatentDiffusion.device` プロパティをそのまま利用 |
-| 6 | `TypeError: CFGDenoiser.forward() got an unexpected keyword argument 'model_options'` | A1111 forward が厳格シグネチャ | `patch_cfg_denoiser_forward()` |
-| 7 | `AttributeError: ... has no attribute 'diffusion_model'` | U-Net のパスが1段深い | `__dict__["diffusion_model"]` エイリアス |
-| 8 | 標準 DPM++ / Euler が壊れる | RES4LYF が `sample_dpmpp_2m` 等を上書き | `_register_extra_rk_beta_samplers` の衝突スキップ |
+- **After** `sd_samplers.set_samplers()` — standard sampler list is fixed before RES4LYF is **appended**
+- **Before** `extensions.list_extensions()` — native registration before extensions stabilizes UI rebuild timing
+- `try/except` + `traceback` — RES4LYF failure does not block A1111 startup (Forge-style)
+- Same path on `initialize_rest(reload_script_modules=True)` reload
 
 ---
 
-## 8. Forge との差分まとめ
+## 7. Errors encountered and fixes
 
-| 項目 | Forge-Nunchaku | A1111（本統合） |
-|------|----------------|-----------------|
-| glue ファイル | `modules_forge/forge_res4lyf_samplers.py` | `modules/a1111_res4lyf_samplers.py` |
-| 起動フック | `initialize_forge()` 内 | `initialize_rest()` 内 |
-| ComfyUI path | Forge backend が既に整備 | `_ensure_comfyui_on_path()` で自前追加 |
-| サンプラー登録 API | `all_samplers` 直接追加 + `set_samplers()` | 同左 |
-| サンプラークラス | `RES4LYFSampler(KDiffusionSampler)` | `_build_res4lyf_constructor` + shim 付き `wrapped_func` |
-| RK 動的登録 | Forge 版 `RES4LYF/beta/__init__.py` 内 | A1111 glue の `_register_extra_rk_beta_samplers()` |
-| `bong_tangent` | `sd_schedulers.py` にネイティブあり | glue でラップ登録 |
-| モデル shim | Forge は Comfy 型 `BaseModel` | A1111 専用 `a1111_res4lyf_shim.py` が必須 |
-| 名前衝突対策 | Forge 環境では問題化しにくい | **明示的スキップ**が必須 |
-
----
-
-## 9. 制限事項と今後の拡張
-
-### 9.1 現状のスコープ（Phase 1）
-
-- **SD1 / SDXL、EPS パラメータ化** を主対象とした shim
-- Flux / HiDream 向けの `double_stream_blocks` 等のパスは **未対応**（`rk_sampler_beta.py` 内の該当分岐は A1111 では通常到達しない）
-
-### 9.2 衝突スキップにより UI に出ない名前
-
-`RK_SAMPLER_NAMES_BETA_NO_FOLDERS` のうち A1111 標準と同名のもの（例: `dpmpp_2m`, `euler`, `ddim`）は、RES4LYF 版は **意図的に未登録**。標準サンプラーを使用すること。
-
-### 9.3 関連ドキュメント
-
-- `md/A1111_RES4LYF_SHIM_PLAN.md` — shim 設計・API 表面一覧・フェーズ計画
-- Forge 参照実装: `Stable-Diffusion-WebUI-Forge-Nunchaku/modules_forge/forge_res4lyf_samplers.py`
+| # | Error | Cause | Fix |
+|---|-------|-------|-----|
+| 1 | `ModuleNotFoundError: torchaudio` | RES4LYF → `comfy.sd` dependency | `pip install torchaudio` in venv (manual) |
+| 2 | `ImportError: cannot import name 'einsum' from 'einops'` | `einops==0.4.1` pin too old | Relax requirements to `einops>=0.4.1` |
+| 3 | `ModuleNotFoundError: av` | ComfyUI dependency | `pip install av` (manual) |
+| 4 | `AttributeError: ... has no attribute 'model_sampling'` | `LatentDiffusion` lacks ComfyUI attrs | `a1111_res4lyf_shim.py` + `res4lyf_shim_context` |
+| 5 | `AttributeError: property 'device' ... has no setter` | shim tried to assign `device` | Use existing `LatentDiffusion.device` property |
+| 6 | `TypeError: CFGDenoiser.forward() got an unexpected keyword argument 'model_options'` | Strict A1111 forward signature | `patch_cfg_denoiser_forward()` |
+| 7 | `AttributeError: ... has no attribute 'diffusion_model'` | U-Net one level deeper on A1111 | `__dict__["diffusion_model"]` alias |
+| 8 | Standard DPM++ / Euler broken | RES4LYF overwrote `sample_dpmpp_2m` etc. | Collision skip in `_register_extra_rk_beta_samplers` |
 
 ---
 
-## 付録 A: ファイルツリー（本統合で触った部分のみ）
+## 8. Differences from Forge
+
+| Item | Forge-Nunchaku | A1111 (this integration) |
+|------|----------------|--------------------------|
+| Glue file | `modules_forge/forge_res4lyf_samplers.py` | `modules/a1111_res4lyf_samplers.py` |
+| Startup hook | `initialize_forge()` | `initialize_rest()` |
+| ComfyUI path | Forge backend prepared | `_ensure_comfyui_on_path()` |
+| Sampler registration API | Extend `all_samplers` + `set_samplers()` | Same |
+| Sampler class | `RES4LYFSampler(KDiffusionSampler)` | `_build_res4lyf_constructor` + shim `wrapped_func` |
+| Dynamic RK registration | In Forge `RES4LYF/beta/__init__.py` | A1111 glue `_register_extra_rk_beta_samplers()` |
+| `bong_tangent` | Native in `sd_schedulers.py` | Wrapped registration in glue |
+| Model shim | Forge uses Comfy `BaseModel` | A1111-specific `a1111_res4lyf_shim.py` required |
+| Name collision | Less problematic on Forge | **Explicit skip** required |
+
+---
+
+## 9. Limitations and future work
+
+### 9.1 Current scope (Phase 1)
+
+- Shim targets **SD1 / SDXL, EPS** parameterization
+- Flux / HiDream paths (`double_stream_blocks`, etc.) **not supported** (usually not reached on A1111)
+
+### 9.2 Names skipped from UI due to collision
+
+RES4LYF variants of names that match A1111 standards (e.g. `dpmpp_2m`, `euler`, `ddim`) are **intentionally not registered**. Use the standard A1111 samplers for those names.
+
+### 9.3 Related documentation
+
+- `md/A1111_RES4LYF_SHIM_PLAN.md` — shim design, API surface, phases
+- Forge reference: `Stable-Diffusion-WebUI-Forge-Nunchaku/modules_forge/forge_res4lyf_samplers.py`
+
+---
+
+## Appendix A: File tree (integration touch points only)
 
 ```
 D:\USERFILES\A1111\
 ├── modules\
-│   ├── a1111_res4lyf_samplers.py   [新規]
-│   ├── a1111_res4lyf_shim.py         [新規]
-│   ├── initialize.py                 [修正: +10行]
-│   └── RES4LYF\                    [無改変・配置のみ]
-├── ComfyUI-master\                 [無改変・配置のみ]
+│   ├── a1111_res4lyf_samplers.py   [new]
+│   ├── a1111_res4lyf_shim.py         [new]
+│   ├── initialize.py                 [modified: +10 lines]
+│   └── RES4LYF\                    [unchanged, vendored]
+├── ComfyUI-master\                 [unchanged, vendored]
 └── md\
-    ├── A1111_RES4LYF_INTEGRATION.md  [本書]
-    └── A1111_RES4LYF_SHIM_PLAN.md    [計画書]
+    ├── A1111_RES4LYF_INTEGRATION.md  [this document]
+    └── A1111_RES4LYF_SHIM_PLAN.md    [plan]
 ```
 
 ---
 
-## 付録 B: 動作確認の目安
+## Appendix B: Verification log markers
 
-起動ログに以下が出れば登録成功の目安:
+Successful registration typically logs:
 
 ```
 [RES4LYF] Added ComfyUI to sys.path: ...
@@ -943,7 +1062,7 @@ D:\USERFILES\A1111\
 [RES4LYF shim] Patched CFGDenoiser.forward to drop unknown kwargs
 ```
 
-衝突スキップ時:
+On collision skip:
 
 ```
 [RES4LYF] Skipped K name(s) that would overwrite A1111 standard samplers: [...]
@@ -951,4 +1070,4 @@ D:\USERFILES\A1111\
 
 ---
 
-*本文書は `modules/a1111_res4lyf_samplers.py` / `modules/a1111_res4lyf_shim.py` / `modules/initialize.py` の実ファイル内容に基づく。*
+*This document reflects `modules/a1111_res4lyf_samplers.py`, `modules/a1111_res4lyf_shim.py`, and `modules/initialize.py` as implemented in the repository.*
