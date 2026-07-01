@@ -1,11 +1,12 @@
 setuptools==69.5.1  # temp fix for compatibility with some old packages
+av
 GitPython==3.1.32
 Pillow==10.4.0
 accelerate==1.9.0
 blendmodes==2024.1.1
 clean-fid==0.1.35
 diskcache==5.6.3
-einops==0.4.1
+einops>=0.4.1
 facexlib==0.3.0
 fastapi==0.94.0
 gradio==3.41.2

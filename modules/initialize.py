@@ -96,6 +96,16 @@ def initialize_rest(*, reload_script_modules=False):
     sd_samplers.set_samplers()
     startup_timer.record("set samplers")
 
+    # Register RES4LYF samplers and schedulers (mirrors Forge's forge_res4lyf_samplers hook)
+    try:
+        from modules import a1111_res4lyf_samplers
+        a1111_res4lyf_samplers.register_res4lyf_samplers()
+        a1111_res4lyf_samplers.register_res4lyf_schedulers()
+        startup_timer.record("register RES4LYF")
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
     from modules import extensions
     extensions.list_extensions()
     startup_timer.record("list extensions")
