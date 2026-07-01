@@ -260,6 +260,7 @@ This project is licensed under **AGPL-3.0** (GNU Affero General Public License v
 This project is built upon the following repositories, each with their respective licenses:
 
 - **[ComfyUI](https://github.com/comfyanonymous/ComfyUI)** — GPL-3.0 — The most powerful and modular diffusion model GUI, API and backend with a graph/nodes interface by [Comfy-Org](https://github.com/Comfy-Org).
+- **[RES4LYF](https://github.com/ClownsharkBatwing/RES4LYF)** — AGPL-3.0 — ComfyUI custom node for advanced RES/Bongmath samplers and schedulers.
 - **[stable-diffusion-webui](https://github.com/AUTOMATIC1111/stable-diffusion-webui)** - AGPL-3.0
 - **[ADetailer](https://github.com/Bing-su/adetailer)** - AGPL-3.0
 - **[sd-webui-controlnet](https://github.com/Mikubill/sd-webui-controlnet)** - GPL-3.0
