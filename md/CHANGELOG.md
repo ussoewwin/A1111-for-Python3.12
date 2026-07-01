@@ -1,6 +1,17 @@
-# Release Notes (v1.01 to v2.3.2)
+# Release Notes (v1.01 to v2.3.3)
 
-This document contains release notes for versions v1.01 through v2.3.2 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.3.3 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.3.3
+
+- **Added**: **RES4LYF samplers and schedulers** — ComfyUI RES4LYF integration for A1111 via `modules/a1111_res4lyf_samplers.py` and `modules/a1111_res4lyf_shim.py`. Registers RES4LYF-derived sampling methods (including dynamic RK variants) plus schedulers `beta57` and `bong_tangent` in the native txt2img/img2img UI. Vendored `ComfyUI-master/` on `sys.path` for `comfy.*` runtime imports; `modules/RES4LYF/` is left unmodified.
+- **Added**: Startup hook in `modules/initialize.py` — calls RES4LYF registration immediately after `sd_samplers.set_samplers()`.
+- **Fixed**: **RES4LYF / A1111 sampler name collision** — when a RES4LYF sampler name matches a built-in A1111 sampler (e.g. `dpmpp_2m`, `euler`), the RES4LYF entry is skipped so standard samplers keep working (`a194ea56`).
+- **Summary**: Native A1111 UI support for RES4LYF samplers and schedulers (Forge-style glue + execution shim).
+- **Technical details**: Refer here for the full technical write-up: [A1111 RES4LYF Integration](A1111_RES4LYF_INTEGRATION.md).
+- **Release Note**: [v2.3.3 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3.3)
 
 ---
 
