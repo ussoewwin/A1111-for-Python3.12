@@ -43,6 +43,13 @@ class UiCheckpointMerger:
                         self.tertiary_model_name = gr.Dropdown(sd_models.checkpoint_tiles(), elem_id="modelmerger_tertiary_model_name", label="Tertiary model (C)")
                         create_refresh_button(self.tertiary_model_name, sd_models.list_models, lambda: {"choices": sd_models.checkpoint_tiles()}, "refresh_checkpoint_C")
 
+                    with FormRow(elem_id="modelmerger_model_paths"):
+                        self.primary_model_path = gr.Textbox(label="Primary path (optional)", elem_id="modelmerger_primary_model_path", placeholder=r"D:\path\to\model.safetensors")
+                        self.secondary_model_path = gr.Textbox(label="Secondary path (optional)", elem_id="modelmerger_secondary_model_path", placeholder=r"D:\path\to\model.safetensors")
+                        self.tertiary_model_path = gr.Textbox(label="Tertiary path (optional)", elem_id="modelmerger_tertiary_model_path", placeholder=r"D:\path\to\model.safetensors")
+
+                    self.output_ckpt_dir = gr.Textbox(label="Output folder (optional)", elem_id="modelmerger_output_ckpt_dir", placeholder=r"Default: models\Stable-diffusion or --ckpt-dir")
+
                     self.custom_name = gr.Textbox(label="Custom Name (Optional)", elem_id="modelmerger_custom_name")
                     self.interp_amount = gr.Slider(minimum=0.0, maximum=1.0, step=0.05, label='Multiplier (M) - set to 0 to get model A', value=0.3, elem_id="modelmerger_interp_amount")
                     self.interp_method = gr.Radio(choices=["No interpolation", "Weighted sum", "Add difference"], value="Weighted sum", label="Interpolation Method", elem_id="modelmerger_interp_method")
@@ -86,7 +93,18 @@ class UiCheckpointMerger:
     def setup_ui(self, dummy_component, sd_model_checkpoint_component):
         self.checkpoint_format.change(lambda fmt: gr.update(visible=fmt == 'safetensors'), inputs=[self.checkpoint_format], outputs=[self.metadata_editor], show_progress=False)
 
-        self.read_metadata.click(extras.read_metadata, inputs=[self.primary_model_name, self.secondary_model_name, self.tertiary_model_name], outputs=[self.metadata_json])
+        self.read_metadata.click(
+            extras.read_metadata,
+            inputs=[
+                self.primary_model_name,
+                self.secondary_model_name,
+                self.tertiary_model_name,
+                self.primary_model_path,
+                self.secondary_model_path,
+                self.tertiary_model_path,
+            ],
+            outputs=[self.metadata_json],
+        )
 
         self.modelmerger_merge.click(fn=lambda: '', inputs=[], outputs=[self.modelmerger_result])
         self.modelmerger_merge.click(
@@ -109,6 +127,10 @@ class UiCheckpointMerger:
                 self.add_merge_recipe,
                 self.copy_metadata_fields,
                 self.metadata_json,
+                self.primary_model_path,
+                self.secondary_model_path,
+                self.tertiary_model_path,
+                self.output_ckpt_dir,
             ],
             outputs=[
                 self.primary_model_name,

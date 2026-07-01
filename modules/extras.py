@@ -13,6 +13,19 @@ import gradio as gr
 import safetensors.torch
 
 
+def stringify_safetensors_metadata(metadata: dict) -> dict:
+    """safetensors requires metadata values to be strings."""
+    result = {}
+    for key, value in metadata.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            result[key] = value
+        else:
+            result[key] = json.dumps(value)
+    return result
+
+
 def run_pnginfo(image):
     if image is None:
         return '', '', ''
@@ -72,11 +85,72 @@ def to_half(tensor, enable):
     return tensor
 
 
-def read_metadata(primary_model_name, secondary_model_name, tertiary_model_name):
+CHECKPOINT_FILE_EXTENSIONS = (".safetensors", ".ckpt")
+
+
+def _normalize_dir_path(path):
+    if not path:
+        return None
+    path = str(path).strip().strip('"').strip("'")
+    if not path:
+        return None
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+
+
+def _normalize_checkpoint_path(path):
+    if not path:
+        return None
+    path = str(path).strip().strip('"').strip("'")
+    if not path:
+        return None
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(path)))
+
+
+def resolve_merger_checkpoint(name_or_path):
+    """Resolve dropdown title, alias, or absolute path to CheckpointInfo."""
+    if not name_or_path:
+        return None
+
+    value = str(name_or_path).strip()
+    if not value:
+        return None
+
+    info = sd_models.get_closet_checkpoint_match(value)
+    if info is not None:
+        return info
+
+    info = sd_models.checkpoints_list.get(value)
+    if info is not None:
+        return info
+
+    path = _normalize_checkpoint_path(value)
+    if path and os.path.isfile(path) and path.lower().endswith(CHECKPOINT_FILE_EXTENSIONS):
+        return sd_models.CheckpointInfo(path)
+
+    return None
+
+
+def pick_merger_checkpoint(dropdown_name, path_override):
+    if path_override and str(path_override).strip():
+        return resolve_merger_checkpoint(path_override)
+    return resolve_merger_checkpoint(dropdown_name)
+
+
+def merger_checkpoint_label(checkpoint_info):
+    if checkpoint_info is None:
+        return "?"
+    return checkpoint_info.name or os.path.basename(checkpoint_info.filename)
+
+
+def read_metadata(primary_model_name, secondary_model_name, tertiary_model_name, primary_model_path="", secondary_model_path="", tertiary_model_path=""):
     metadata = {}
 
-    for checkpoint_name in [primary_model_name, secondary_model_name, tertiary_model_name]:
-        checkpoint_info = sd_models.checkpoints_list.get(checkpoint_name, None)
+    for dropdown_name, path_override in [
+        (primary_model_name, primary_model_path),
+        (secondary_model_name, secondary_model_path),
+        (tertiary_model_name, tertiary_model_path),
+    ]:
+        checkpoint_info = pick_merger_checkpoint(dropdown_name, path_override)
         if checkpoint_info is None:
             continue
 
@@ -85,7 +159,7 @@ def read_metadata(primary_model_name, secondary_model_name, tertiary_model_name)
     return json.dumps(metadata, indent=4, ensure_ascii=False)
 
 
-def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_model_name, interp_method, multiplier, save_as_half, custom_name, checkpoint_format, config_source, bake_in_vae, discard_weights, save_metadata, add_merge_recipe, copy_metadata_fields, metadata_json):
+def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_model_name, interp_method, multiplier, save_as_half, custom_name, checkpoint_format, config_source, bake_in_vae, discard_weights, save_metadata, add_merge_recipe, copy_metadata_fields, metadata_json, primary_model_path="", secondary_model_path="", tertiary_model_path="", output_ckpt_dir=""):
     shared.state.begin(job="model-merge")
 
     def fail(message):
@@ -129,20 +203,26 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
     filename_generator, theta_func1, theta_func2 = theta_funcs[interp_method]
     shared.state.job_count = (1 if theta_func1 else 0) + (1 if theta_func2 else 0)
 
-    if not primary_model_name:
+    if not primary_model_name and not (primary_model_path and str(primary_model_path).strip()):
         return fail("Failed: Merging requires a primary model.")
 
-    primary_model_info = sd_models.checkpoints_list[primary_model_name]
+    primary_model_info = pick_merger_checkpoint(primary_model_name, primary_model_path)
+    if primary_model_info is None:
+        return fail(f"Failed: Primary model not found: {primary_model_path or primary_model_name}")
 
-    if theta_func2 and not secondary_model_name:
+    if theta_func2 and not secondary_model_name and not (secondary_model_path and str(secondary_model_path).strip()):
         return fail("Failed: Merging requires a secondary model.")
 
-    secondary_model_info = sd_models.checkpoints_list[secondary_model_name] if theta_func2 else None
+    secondary_model_info = pick_merger_checkpoint(secondary_model_name, secondary_model_path) if theta_func2 else None
+    if theta_func2 and secondary_model_info is None:
+        return fail(f"Failed: Secondary model not found: {secondary_model_path or secondary_model_name}")
 
-    if theta_func1 and not tertiary_model_name:
+    if theta_func1 and not tertiary_model_name and not (tertiary_model_path and str(tertiary_model_path).strip()):
         return fail(f"Failed: Interpolation method ({interp_method}) requires a tertiary model.")
 
-    tertiary_model_info = sd_models.checkpoints_list[tertiary_model_name] if theta_func1 else None
+    tertiary_model_info = pick_merger_checkpoint(tertiary_model_name, tertiary_model_path) if theta_func1 else None
+    if theta_func1 and tertiary_model_info is None:
+        return fail(f"Failed: Tertiary model not found: {tertiary_model_path or tertiary_model_name}")
 
     result_is_inpainting_model = False
     result_is_instruct_pix2pix_model = False
@@ -242,6 +322,10 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
                 theta_0.pop(key, None)
 
     ckpt_dir = shared.cmd_opts.ckpt_dir or sd_models.model_path
+    if output_ckpt_dir and str(output_ckpt_dir).strip():
+        ckpt_dir = _normalize_dir_path(output_ckpt_dir)
+        if not ckpt_dir or not os.path.isdir(ckpt_dir):
+            return fail(f"Failed: Output directory not found: {output_ckpt_dir}")
 
     filename = filename_generator() if custom_name == '' else custom_name
     filename += ".inpainting" if result_is_inpainting_model else ""
@@ -312,6 +396,8 @@ def run_modelmerger(id_task, primary_model_name, secondary_model_name, tertiary_
 
     _, extension = os.path.splitext(output_modelname)
     if extension.lower() == ".safetensors":
+        if len(metadata) > 0:
+            metadata = stringify_safetensors_metadata(metadata)
         safetensors.torch.save_file(theta_0, output_modelname, metadata=metadata if len(metadata)>0 else None)
     else:
         torch.save(theta_0, output_modelname)

@@ -36,6 +36,79 @@ module_types = [
     network_oft.ModuleTypeOFT(),
 ]
 
+_lora_loaded_log_fingerprint: tuple | None = None
+
+
+def _is_clip_lora_sd_key(sd_key: str) -> bool:
+    return "transformer" in sd_key[:20]
+
+
+def _is_clip_lora_network_key(network_key: str) -> bool:
+    k = network_key.replace(".", "_")
+    if k.startswith("lora_te") or k.startswith("lycoris_te") or k.startswith("oft_te"):
+        return True
+    if "transformer" in k[:40]:
+        return True
+    return False
+
+
+def _lora_apply_stats(net: network.Network):
+    unet_loaded = 0
+    clip_loaded = 0
+    for mod in net.modules.values():
+        if _is_clip_lora_sd_key(mod.sd_key):
+            clip_loaded += 1
+        else:
+            unet_loaded += 1
+    failed = getattr(net, "keys_failed_to_match", None) or []
+    unet_skipped = sum(1 for k in failed if not _is_clip_lora_network_key(k))
+    clip_skipped = sum(1 for k in failed if _is_clip_lora_network_key(k))
+    return unet_loaded, clip_loaded, unet_skipped, clip_skipped
+
+
+def _print_lora_loaded_line(filename, model_flag, target, loaded_count, weight, skipped_count, online_mode=False):
+    if loaded_count == 0:
+        return
+    if skipped_count > 12:
+        print(
+            f"[LORA] Mismatch {filename} for {model_flag}-{target} with "
+            f"{skipped_count} keys mismatched in {loaded_count} keys"
+        )
+    else:
+        print(
+            f"[LORA] Loaded {filename} for {model_flag}-{target} with {loaded_count} keys "
+            f"at weight {weight} (skipped {skipped_count} keys) with on_the_fly = {online_mode}"
+        )
+
+
+def _log_lora_loaded_networks_if_changed():
+    global _lora_loaded_log_fingerprint
+
+    if not loaded_networks:
+        _lora_loaded_log_fingerprint = ()
+        return
+
+    fingerprint = tuple(
+        (net.network_on_disk.filename, net.unet_multiplier, net.te_multiplier, net.dyn_dim)
+        for net in loaded_networks
+    )
+    if fingerprint == _lora_loaded_log_fingerprint:
+        return
+
+    _lora_loaded_log_fingerprint = fingerprint
+
+    if hasattr(shared.sd_model, "model"):
+        model_flag = type(shared.sd_model.model).__name__
+    else:
+        model_flag = "default"
+
+    online_mode = False
+    for net in loaded_networks:
+        filename = net.network_on_disk.filename
+        unet_loaded, clip_loaded, unet_skipped, clip_skipped = _lora_apply_stats(net)
+        _print_lora_loaded_line(filename, model_flag, "UNet", unet_loaded, net.unet_multiplier, unet_skipped, online_mode)
+        _print_lora_loaded_line(filename, model_flag, "CLIP", clip_loaded, net.te_multiplier, clip_skipped, online_mode)
+
 
 re_digits = re.compile(r"\d+")
 re_x_proj = re.compile(r"(.*)_([qkv]_proj)$")
@@ -366,7 +439,13 @@ def convert_diffusers_name_to_compvis(key, is_sd2):
         return f"diffusion_model_input_blocks_{3 + m[0] * 3}_0_op"
 
     if match(m, r"lora_unet_up_blocks_(\d+)_upsamplers_0_conv"):
-        return f"diffusion_model_output_blocks_{2 + m[0] * 3}_2_conv"
+        block_idx = 2 + m[0] * 3
+        # SDXL: upsamplers always sit at type=2 (v2.1 fix). SD1.x/SD2: up_blocks_0 uses type=1.
+        if shared.sd_model and getattr(shared.sd_model, "is_sdxl", False):
+            type_idx = 2
+        else:
+            type_idx = 2 if m[0] > 0 else 1
+        return f"diffusion_model_output_blocks_{block_idx}_{type_idx}_conv"
 
     if match(m, r"text_encoder\.text_model\.encoder\.layers\.(\d+)\.(.+)"):
         layer_suffix = f"{m[0]}_{m[1].replace('.', '_')}"
@@ -621,6 +700,8 @@ def load_network(name, network_on_disk):
         )
         logging.debug(f"Network {network_on_disk.filename} didn't match keys: {keys_failed_to_match}")
 
+    net.keys_failed_to_match = keys_failed_to_match
+
     return net
 
 
@@ -716,6 +797,8 @@ def load_networks(names, te_multipliers=None, unet_multipliers=None, dyn_dims=No
             print(f'\n{lora_not_found_message}\n')
         if shared.opts.lora_not_found_gradio_warning:
             gr.Warning(lora_not_found_message)
+
+    _log_lora_loaded_networks_if_changed()
 
     purge_networks_from_memory()
 
