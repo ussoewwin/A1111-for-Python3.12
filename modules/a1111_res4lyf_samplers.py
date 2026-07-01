@@ -112,6 +112,141 @@ def _mock_comfyui_globals() -> None:
         sys.modules['server'] = server_module
 
 
+# Sampler names that must not have an auto-generated ``_ode`` variant.
+# These are implicit RK families where ``eta=0`` is meaningless / redundant.
+# Mirrors the keyword list used in
+# ``modules_forge/../modules/RES4LYF/beta/__init__.py`` (Forge fork).
+_IMPLICIT_RK_KEYWORDS = (
+    "gauss-legendre",
+    "radau",
+    "lobatto",
+    "irk_exp_diag",
+    "kraaijevanger",
+    "qin_zhang",
+    "pareschi",
+    "crouzeix",
+)
+
+
+def _register_extra_rk_beta_samplers() -> list:
+    """
+    Add the dynamically-generated RK sampler set that the Forge fork of
+    RES4LYF exposes.
+
+    The RES4LYF copy shipped in A1111's ``modules/RES4LYF`` is closer to
+    upstream and its ``beta/__init__.py`` only registers ~17 hand-picked
+    names. The Forge fork instead iterates
+    ``RK_SAMPLER_NAMES_BETA_NO_FOLDERS`` and creates one sampler per
+    entry (plus an ``_ode`` variant for non-implicit families).
+
+    Both copies share the same sampler-name list
+    (``rk_coefficients_beta.py`` is byte-identical), so we can reproduce
+    the Forge behaviour on the A1111 side without editing RES4LYF at
+    all.
+
+    Returns
+    -------
+    list[str]
+        Sampler names newly registered by this call. Empty if all were
+        already registered (which happens if the RES4LYF source has been
+        updated to the Forge behaviour).
+    """
+    try:
+        from modules.RES4LYF.beta.rk_coefficients_beta import (
+            RK_SAMPLER_NAMES_BETA_NO_FOLDERS,
+        )
+        from modules.RES4LYF.beta import rk_sampler_beta
+        from modules import RES4LYF
+    except ImportError as e:
+        logger.warning(f"[RES4LYF] Failed to import RK sampler internals: {e}")
+        return []
+
+    extra = getattr(RES4LYF, "extra_samplers", None)
+    if extra is None:
+        logger.warning("[RES4LYF] RES4LYF.extra_samplers not available")
+        return []
+
+    # A1111 の標準サンプラーが参照する ``k_diffusion.sampling.sample_<name>``
+    # と衝突する名前は絶対に上書きしない。
+    # ``RK_SAMPLER_NAMES_BETA_NO_FOLDERS`` には ``dpmpp_2m`` / ``dpmpp_3m`` /
+    # ``dpmpp_2s`` / ``dpmpp_sde_2s`` / ``dpmpp_3s`` / ``euler`` / ``ddim`` 等、
+    # A1111 の DPM++ 2M / Euler / DDIM の実体名と重なるエントリが含まれる。
+    # これらを ``setattr(k_diffusion.sampling, "sample_<name>", ...)`` すると、
+    # A1111 標準サンプラーが起動する ``getattr(k_diffusion.sampling, "sample_<name>")``
+    # の返り値が RES4LYF のクロージャに差し替わり、標準サンプラーが破壊される。
+    protected_funcnames = set()
+    try:
+        from modules import sd_samplers_kdiffusion
+        for entry in sd_samplers_kdiffusion.samplers_k_diffusion:
+            fn = entry[1]
+            if isinstance(fn, str):
+                protected_funcnames.add(fn)
+    except Exception:
+        logger.exception("[RES4LYF] Failed to snapshot A1111 standard sampler funcnames")
+
+    def _make_sample_fn(rk_type):
+        def sample_fn(model, x, sigmas, extra_args=None, callback=None, disable=None):
+            return rk_sampler_beta.sample_rk_beta(
+                model, x, sigmas, None, extra_args, callback, disable,
+                rk_type=rk_type,
+            )
+        return sample_fn
+
+    def _make_sample_ode_fn(rk_type):
+        def sample_ode_fn(model, x, sigmas, extra_args=None, callback=None, disable=None):
+            return rk_sampler_beta.sample_rk_beta(
+                model, x, sigmas, None, extra_args, callback, disable,
+                rk_type=rk_type, eta=0.0, eta_substep=0.0,
+            )
+        return sample_ode_fn
+
+    added_names = []
+    skipped_collisions = []
+    for name in RK_SAMPLER_NAMES_BETA_NO_FOLDERS:
+        if name == "none":
+            continue
+        if f"sample_{name}" in protected_funcnames:
+            # 標準サンプラー名と衝突。上書き禁止。
+            skipped_collisions.append(name)
+            continue
+        if name not in extra:
+            extra[name] = _make_sample_fn(name)
+            added_names.append(name)
+        if not any(kw in name for kw in _IMPLICIT_RK_KEYWORDS):
+            ode_name = f"{name}_ode"
+            if f"sample_{ode_name}" in protected_funcnames:
+                skipped_collisions.append(ode_name)
+                continue
+            if ode_name not in extra:
+                extra[ode_name] = _make_sample_ode_fn(name)
+                added_names.append(ode_name)
+    if skipped_collisions:
+        logger.info(
+            f"[RES4LYF] Skipped {len(skipped_collisions)} name(s) that would "
+            f"overwrite A1111 standard samplers: {skipped_collisions}"
+        )
+
+    # Mirror RES4LYF/__init__.py::add_samplers so that comfy.k_diffusion.sampling
+    # also carries a ``sample_<name>`` attribute for the newly-added samplers.
+    # This is required for the later comfy -> k_diffusion sync step to find
+    # the function.
+    if added_names:
+        try:
+            from comfy.samplers import KSampler, k_diffusion_sampling
+            for name in added_names:
+                if name not in KSampler.SAMPLERS:
+                    try:
+                        idx = KSampler.SAMPLERS.index("uni_pc_bh2")
+                        KSampler.SAMPLERS.insert(idx + 1, name)
+                    except ValueError:
+                        pass
+                setattr(k_diffusion_sampling, f"sample_{name}", extra[name])
+        except Exception:
+            logger.exception("[RES4LYF] Failed to publish extra RK samplers to comfy.k_diffusion.sampling")
+
+    return added_names
+
+
 def _build_res4lyf_constructor(sampler_key: str) -> Callable:
     """``SamplerData.constructor`` 用のクロージャを返す。
 
@@ -162,6 +297,13 @@ def register_res4lyf_samplers() -> None:
         from modules import RES4LYF
         import comfy.k_diffusion.sampling as comfy_k_diffusion_sampling
         import k_diffusion.sampling
+
+        # Forge fork の RES4LYF は beta/__init__.py で全 RK サンプラーを動的登録
+        # するのに対し、A1111 に置いた upstream 版は 17 個しか登録しない。
+        # ここで足りない分を A1111 側から追加登録する（RES4LYF 本体は無編集）。
+        extra_added = _register_extra_rk_beta_samplers()
+        if extra_added:
+            logger.info(f"[RES4LYF] Added {len(extra_added)} extra RK samplers (Forge parity)")
 
         extra_samplers = getattr(RES4LYF, 'extra_samplers', {})
         if not extra_samplers:
