@@ -68,7 +68,7 @@ All platform-specific handling is performed automatically by `modules/launch_uti
 
 The following packages are installed automatically during initial setup:
 
-- **PyTorch**: 2.10.0+cu130 (CUDA 13.0)
+- **PyTorch**: 2.11.0+cu130 (CUDA 13.0), with matching `torchvision==0.26.0+cu130` and `torchaudio==2.11.0+cu130`
 - **Flash-Attention 2**:
   - Windows: `2.8.3+cu130torch2.10.0` (prebuilt wheel)
   - Linux: `flash-attn==2.8.3` (source build)
@@ -102,9 +102,9 @@ Pick the section for your OS and follow the steps in order.
    python -m pip install --upgrade pip
    ```
 
-4. Install PyTorch 2.10.0+cu130:
+4. Install PyTorch 2.11.0+cu130:
    ```cmd
-   pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu130
+   pip install torch==2.11.0+cu130 torchvision==0.26.0+cu130 torchaudio==2.11.0+cu130 --index-url https://download.pytorch.org/whl/cu130
    ```
 
 5. Install cross-platform Python deps:
@@ -157,9 +157,9 @@ Pick the section for your OS and follow the steps in order.
    python -m pip install --upgrade pip
    ```
 
-4. Install PyTorch 2.10.0+cu130:
+4. Install PyTorch 2.11.0+cu130:
    ```bash
-   pip install torch==2.10.0 torchvision --index-url https://download.pytorch.org/whl/cu130
+   pip install torch==2.11.0+cu130 torchvision==0.26.0+cu130 torchaudio==2.11.0+cu130 --index-url https://download.pytorch.org/whl/cu130
    ```
 
 5. Install cross-platform Python deps:
@@ -209,9 +209,9 @@ Pick the section for your OS and follow the steps in order.
    python -m pip install --upgrade pip
    ```
 
-4. Install PyTorch 2.10.0 (CPU / MPS):
+4. Install PyTorch 2.11.0 (CPU / MPS):
    ```bash
-   pip install torch==2.10.0 torchvision
+   pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0
    ```
 
 5. Install cross-platform Python deps:
