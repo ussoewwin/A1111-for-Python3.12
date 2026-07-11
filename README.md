@@ -30,6 +30,10 @@ The following popular extensions are built-in and ready to use out of the box:
 - **Aspect Ratio** presets (built-in, no extension needed)
 - **MultiDiffusion + Tiled VAE** — high-resolution upscaling
 
+### RES4LYF Samplers
+
+Native support for **[RES4LYF](https://github.com/ClownsharkBatwing/RES4LYF)** samplers in the A1111 **Sampling method** dropdown (100+ advanced RES / Bongmath / hybrid RK methods), plus related schedule types such as `beta57` and `bong_tangent`. Generation runs through an A1111-side shim; the vendored RES4LYF sources under `modules/RES4LYF/` are left unmodified.
+
 ### Python 3.12 Native
 
 Fully ported to Python 3.12. No `pkg_resources` hacks, no legacy compatibility layers. All dependency conflicts (NumPy, SciPy, `clip.py`) are handled automatically at startup.
