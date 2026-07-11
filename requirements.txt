@@ -27,7 +27,7 @@ resize-right
 safetensors
 scikit-image>=0.19
 tomesd
-torch
+# torch is installed manually / via TORCH_COMMAND (do not list here: pip -r would clobber CUDA builds)
 torchdiffeq
 torchsde
 tokenizers==0.10.3

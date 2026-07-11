@@ -151,6 +151,33 @@ def run_pip(command, desc=None, live=default_command_live):
     return run(f'"{python}" -m pip {command} --prefer-binary{only_binary_flag}{index_url_line}', desc=f"Installing {desc}", errdesc=f"Couldn't install {desc}", live=live)
 
 
+def _torch_stack_constraint_file() -> str | None:
+    """
+    Pin only installed torch (exact local version, e.g. 2.13.0+cu132).
+    Prevents later pip -r / extension install.py from replacing CUDA builds with PyPI CPU wheels.
+    """
+    import importlib.metadata
+
+    try:
+        ver = importlib.metadata.version("torch")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+    path = os.path.join(script_path, "tmp", "torch_stack_constraints.txt")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(f"torch=={ver}\n")
+    return path
+
+
+def _apply_torch_stack_pip_constraint() -> None:
+    path = _torch_stack_constraint_file()
+    if path is None:
+        return
+    os.environ["PIP_CONSTRAINT"] = path
+    print(f"Torch pinned ({path}); pip will not replace torch")
+
+
 def check_run_python(code: str) -> bool:
     result = subprocess.run([python, "-c", code], capture_output=True, shell=False)
     return result.returncode == 0
@@ -611,6 +638,10 @@ def prepare_environment():
         print("Warning: PyTorch is not installed. Please install it manually before running the web UI.")
         print(f"Suggested command: {torch_command}")
 
+    # Pin installed CUDA torch before requirements / extension installers can pull PyPI CPU torch.
+    if is_installed("torch"):
+        _apply_torch_stack_pip_constraint()
+
     # Only test CUDA if torch is installed
     if is_installed("torch"):
         if args.use_ipex:
@@ -675,7 +706,8 @@ def prepare_environment():
         run(f'"{python}" -m pip install --no-cache-dir numpy==1.26.4', "Installing numpy 1.26.4", "Couldn't install numpy 1.26.4", live=False)
 
     if not requirements_met(requirements_file):
-        run_pip(f"install -r \"{requirements_file}\"", "requirements")
+        # only-if-needed: do not upgrade already-satisfied deps (esp. torch pulled by accelerate/etc.)
+        run_pip(f"install -U --upgrade-strategy only-if-needed -r \"{requirements_file}\"", "requirements")
         startup_timer.record("install requirements")
     
     # scipy install: unified across platforms via PyPI to match numpy 1.26.4 dtype layout
