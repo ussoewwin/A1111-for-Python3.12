@@ -1,6 +1,15 @@
-# Release Notes (v1.01 to v2.3.4)
+# Release Notes (v1.01 to v2.3.5)
 
-This document contains release notes for versions v1.01 through v2.3.4 of `ussoewwin/A1111-for-Python3.12`.
+This document contains release notes for versions v1.01 through v2.3.5 of `ussoewwin/A1111-for-Python3.12`.
+
+---
+
+## v2.3.5
+
+- **Fixed**: **RES4LYF hybrid `*4h4s` sampler IndexError** — `lawson45-gen-mod_4h4s` / `lawson45-gen-mod_4h4s_ode` crashed mid-run with `IndexError: index 4 is out of bounds for dimension 0 with size 4` in `rk_sampler_beta.py` when rotating `data_prev_`. A1111 shim (`modules/a1111_res4lyf_shim.py`) expands the hardcoded size-4 history buffers to 8 for the duration of a RES4LYF sample; `modules/RES4LYF/` is left unmodified (`302589c0`).
+- **Docs**: README Key Features notes native RES4LYF sampler support; technical write-up for the IndexError fix (`4bdb17e6`, `54ac6e36`).
+- **Summary**: RES4LYF `4h4s` hybrid sampler crash fix via A1111-side shim; README / docs for RES4LYF support.
+- **Release Note**: [v2.3.5 Release](https://github.com/ussoewwin/A1111-for-Python3.12/releases/tag/v2.3.5)
 
 ---
 
