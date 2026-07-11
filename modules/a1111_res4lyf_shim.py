@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import sys
 from contextlib import contextmanager
 
 import torch
@@ -260,9 +261,90 @@ def res4lyf_shim_context(cfg_denoiser):
     except Exception:
         logger.exception("[RES4LYF shim] Failed to alias diffusion_model")
 
+    # --- 3. patch RES4LYF rk_sampler_beta torch.zeros for data_prev_* buffers ---
+    #
+    # RES4LYF allocates ``data_prev_`` / ``data_prev_x_`` / ``data_prev_y_``
+    # as ``torch.zeros(4, *x.shape, ...)`` (rk_sampler_beta.py lines 744, 746,
+    # 1134, 1135) — hardcoded size 4. For hybrid samplers like
+    # ``lawson45-gen-mod_4h4s`` where ``hybrid_stages = 4``, ``recycled_stages``
+    # becomes 4 (rk_sampler_beta.py line 725), and the rotation loop at line
+    # 2028-2029 writes ``data_prev_[4]`` → IndexError (size 4, valid 0..3).
+    #
+    # We cannot edit ``modules/RES4LYF/``. Instead, we replace ``torch.zeros``
+    # **only in the ``rk_sampler_beta`` module's globals** (not the global
+    # ``torch`` package) with a wrapper that grows any size-4 first-dim
+    # allocation to 8 — enough for all current hybrid_stages values
+    # (max 4 → need 5 slots, 8 gives headroom). Other torch.zeros calls
+    # (different leading dim) pass through unchanged.
+    rk_sampler_beta_mod = None
+    try:
+        import importlib
+        # RES4LYF is imported as a subpackage of ``modules``; the fully
+        # qualified name is ``RES4LYF.beta.rk_sampler_beta``. The bare
+        # ``beta.rk_sampler_beta`` form only resolves when CWD is inside
+        # the RES4LYF package, which is not the case at runtime.
+        for _modname in (
+            "RES4LYF.beta.rk_sampler_beta",
+            "modules.RES4LYF.beta.rk_sampler_beta",
+            "beta.rk_sampler_beta",
+        ):
+            _m = sys.modules.get(_modname)
+            if _m is not None:
+                rk_sampler_beta_mod = _m
+                break
+        if rk_sampler_beta_mod is None:
+            for _modname in (
+                "RES4LYF.beta.rk_sampler_beta",
+                "modules.RES4LYF.beta.rk_sampler_beta",
+                "beta.rk_sampler_beta",
+            ):
+                try:
+                    rk_sampler_beta_mod = importlib.import_module(_modname)
+                    break
+                except Exception:
+                    continue
+    except Exception:
+        rk_sampler_beta_mod = None
+
+    zeros_patched = False
+    _rk_torch = None
+    if rk_sampler_beta_mod is not None:
+        # Inject a module-level helper that shadows torch.zeros only inside
+        # rk_sampler_beta's global scope. We do this by replacing the
+        # ``torch`` attribute the module sees with a lightweight namespace
+        # that proxies all torch.* calls but intercepts ``zeros``.
+        try:
+            _rk_torch = rk_sampler_beta_mod.torch
+            _orig_torch_zeros = _rk_torch.zeros
+
+            def _patched_zeros(*args, **kwargs):
+                if args and isinstance(args[0], int) and args[0] == 4:
+                    args = (8,) + args[1:]
+                return _orig_torch_zeros(*args, **kwargs)
+
+            # Build a proxy that forwards every attribute to real torch except
+            # ``zeros`` which goes through our wrapper.
+            class _TorchProxy:
+                def __getattr__(self, name):
+                    return getattr(_rk_torch, name)
+
+                def zeros(self, *args, **kwargs):
+                    return _patched_zeros(*args, **kwargs)
+
+            rk_sampler_beta_mod.torch = _TorchProxy()
+            zeros_patched = True
+        except Exception:
+            logger.debug("[RES4LYF shim] Failed to patch rk_sampler_beta.torch.zeros", exc_info=True)
+
     try:
         yield
     finally:
+        # --- restore rk_sampler_beta.torch ---
+        if zeros_patched and rk_sampler_beta_mod is not None:
+            try:
+                rk_sampler_beta_mod.torch = _rk_torch
+            except Exception:
+                logger.debug("[RES4LYF shim] restore rk_sampler_beta.torch failed", exc_info=True)
         # --- restore diffusion_model ---
         if diffusion_installed:
             try:
